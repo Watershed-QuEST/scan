@@ -2,6 +2,21 @@
 ## Project: QuEST
 ## Here we will be Calibrating s::can data using Partial Least Squares Regression (PLSR) 
 ## Following Arial's s::can guide
+##
+## RAW (uncompensated) FINGERPRINT VERSION -- NEW (Sep 28)
+## Identical calibration pipeline to 06_SS_calibrate_DOC.R, but reads the
+## raw/uncompensated spectra (*_merged_raw.csv, produced by
+## 05_SS_merge_grabsamples_and_scan.R from 01/02's *_absparams_raw*.csv)
+## instead of the default turbidity-compensated spectra. This tests Ariel's
+## suggestion that the compensation algorithm may be overcorrecting and
+## removing real DOC-related spectral signal. Run this alongside
+## 06_SS_calibrate_DOC.R and compare the report_fit_stats() R2/r/RMSE
+## output for each site -- that's the actual side-by-side test. Every
+## output file (figures, predicted CSVs) is suffixed "_raw" so nothing here
+## ever overwrites the compensated pipeline's output. If you change
+## something here (ncomp, a QC threshold, etc.), consider whether the same
+## change should be mirrored in 06_SS_calibrate_DOC.R for a fair
+## comparison, and vice versa -- these two files are NOT auto-synced.
 ##==============================================================================
 
 library(googledrive)
@@ -97,22 +112,22 @@ merged <- googledrive::drive_ls(path = scan, type = "csv")
 2
 
 #SSM01
-googledrive::drive_download(file = merged$id[merged$name=="SSM01_merged.csv"], 
-                            path = "googledrive/SSM01_merged.csv",
+googledrive::drive_download(file = merged$id[merged$name=="SSM01_merged_raw.csv"], 
+                            path = "googledrive/SSM01_merged_raw.csv",
                             overwrite = T)
 #SSM20
-googledrive::drive_download(file = merged$id[merged$name=="SSM20_merged.csv"], 
-                            path = "googledrive/SSM20_merged.csv",
+googledrive::drive_download(file = merged$id[merged$name=="SSM20_merged_raw.csv"], 
+                            path = "googledrive/SSM20_merged_raw.csv",
                             overwrite = T)
 #SST13
-googledrive::drive_download(file = merged$id[merged$name=="SST13_merged.csv"], 
-                            path = "googledrive/SST13_merged.csv",
+googledrive::drive_download(file = merged$id[merged$name=="SST13_merged_raw.csv"], 
+                            path = "googledrive/SST13_merged_raw.csv",
                             overwrite = T)
 
 # Load them separately 
-SSM01 <- read.csv("googledrive/SSM01_merged.csv", na = c("", "NaN", "Na", "NA")) # make sure this matches your non-detects)
-SSM20 <- read.csv("googledrive/SSM20_merged.csv", na = c("", "NaN", "Na", "NA")) # make sure this matches your non-detects)
-SST13 <- read.csv("googledrive/SST13_merged.csv", na = c("", "NaN", "Na", "NA")) # make sure this matches your non-detects)
+SSM01 <- read.csv("googledrive/SSM01_merged_raw.csv", na = c("", "NaN", "Na", "NA")) # make sure this matches your non-detects)
+SSM20 <- read.csv("googledrive/SSM20_merged_raw.csv", na = c("", "NaN", "Na", "NA")) # make sure this matches your non-detects)
+SST13 <- read.csv("googledrive/SST13_merged_raw.csv", na = c("", "NaN", "Na", "NA")) # make sure this matches your non-detects)
 
 # DateTime at midnight is missing 00:00:00 time, so filling in using grep
 SSM01$DateTime[grep("[0-9]{4}-[0-9]{2}-[0-9]{2}$",SSM01$DateTime)] <- paste(
@@ -256,9 +271,9 @@ drop_mdl_replaced <- function(df, site_name) {
 
   df
 }
-SSM01 <- drop_mdl_replaced(SSM01, "SSM01")
-SSM20 <- drop_mdl_replaced(SSM20, "SSM20")
-SST13 <- drop_mdl_replaced(SST13, "SST13")
+SSM01 <- drop_mdl_replaced(SSM01, "SSM01 (raw fingerprint)")
+SSM20 <- drop_mdl_replaced(SSM20, "SSM20 (raw fingerprint)")
+SST13 <- drop_mdl_replaced(SST13, "SST13 (raw fingerprint)")
 
 # TRIED (Sep 25) and REVERTED: explicitly dropping SST13's two high-DOC
 # grab samples (2024-11-01, NPOC = 63.74 mg/L; 2024-11-11, NPOC = 53.96
@@ -293,29 +308,27 @@ grab_SSM20 = SSM20[!is.na(SSM20$Grab_sample) & SSM20$Grab_sample == "Y",]
 grab_SST13 = SST13[!is.na(SST13$Grab_sample) & SST13$Grab_sample == "Y",]
 
 ##########################################################################
-#### Save the complete abs record + the training abs (compensated) #####
+#### Save the complete abs record + the training abs (raw fingerprint) #
 ##########################################################################
-# "Complete abs record" = SSM01/SSM20/SST13 as they stand right here: the
-# full ~30,000-row deployment time series, post drop_mdl_replaced() (so
-# MDL/flat_spec/spec_spiky grab flags are already applied), same data the
-# predicted time series below is built from. "Training abs" = grab_SSM01/
-# grab_SSM20/grab_SST13, the grab-matched rows actually fed into plsr() as
-# calibration data. Saved together so it's easy to see exactly what the
-# model saw vs. the full record it's predicting over -- same "predicted"
-# Drive folder the PredictedC_*.csv files go to further down.
-write.csv(SSM01, "predicted/SSM01_complete_abs_record.csv", row.names = FALSE)
-write.csv(SSM20, "predicted/SSM20_complete_abs_record.csv", row.names = FALSE)
-write.csv(SST13, "predicted/SST13_complete_abs_record.csv", row.names = FALSE)
-write.csv(grab_SSM01, "predicted/SSM01_training_abs.csv", row.names = FALSE)
-write.csv(grab_SSM20, "predicted/SSM20_training_abs.csv", row.names = FALSE)
-write.csv(grab_SST13, "predicted/SST13_training_abs.csv", row.names = FALSE)
+# Same idea as the compensated script's version of this block: SSM01/
+# SSM20/SST13 here are the full ~30,000-row raw-fingerprint deployment
+# record (post drop_mdl_replaced()), grab_SSM01/SSM20/SST13 are the
+# grab-matched rows actually used to train the raw-fingerprint PLSR model.
+# "_raw" suffix keeps these distinct from the compensated script's output
+# in the same "predicted" Drive folder.
+write.csv(SSM01, "predicted/SSM01_complete_abs_record_raw.csv", row.names = FALSE)
+write.csv(SSM20, "predicted/SSM20_complete_abs_record_raw.csv", row.names = FALSE)
+write.csv(SST13, "predicted/SST13_complete_abs_record_raw.csv", row.names = FALSE)
+write.csv(grab_SSM01, "predicted/SSM01_training_abs_raw.csv", row.names = FALSE)
+write.csv(grab_SSM20, "predicted/SSM20_training_abs_raw.csv", row.names = FALSE)
+write.csv(grab_SST13, "predicted/SST13_training_abs_raw.csv", row.names = FALSE)
 abs_record_drive_folder_id <- "13bh64kWtdgknMUqdfDKkJ4JAzvWqLpu8"
-drive_put(media = "predicted/SSM01_complete_abs_record.csv", path = as_id(abs_record_drive_folder_id))
-drive_put(media = "predicted/SSM20_complete_abs_record.csv", path = as_id(abs_record_drive_folder_id))
-drive_put(media = "predicted/SST13_complete_abs_record.csv", path = as_id(abs_record_drive_folder_id))
-drive_put(media = "predicted/SSM01_training_abs.csv", path = as_id(abs_record_drive_folder_id))
-drive_put(media = "predicted/SSM20_training_abs.csv", path = as_id(abs_record_drive_folder_id))
-drive_put(media = "predicted/SST13_training_abs.csv", path = as_id(abs_record_drive_folder_id))
+drive_put(media = "predicted/SSM01_complete_abs_record_raw.csv", path = as_id(abs_record_drive_folder_id))
+drive_put(media = "predicted/SSM20_complete_abs_record_raw.csv", path = as_id(abs_record_drive_folder_id))
+drive_put(media = "predicted/SST13_complete_abs_record_raw.csv", path = as_id(abs_record_drive_folder_id))
+drive_put(media = "predicted/SSM01_training_abs_raw.csv", path = as_id(abs_record_drive_folder_id))
+drive_put(media = "predicted/SSM20_training_abs_raw.csv", path = as_id(abs_record_drive_folder_id))
+drive_put(media = "predicted/SST13_training_abs_raw.csv", path = as_id(abs_record_drive_folder_id))
 
 grab.DOCSSM01 = grab_SSM01$NPOC..mg.C.L.
 grab.DOCSSM20 = grab_SSM20$NPOC..mg.C.L.
@@ -374,9 +387,9 @@ mask_non_grabs <- function(df, site_name) {
 # see the comment above grab.spec.datSSM01 for why (row-count mismatch
 # with grab.DOCSSM01/etc caused a silent recycling bug). Left in place
 # in case mask_non_grabs() is useful again for something else later.
-SSM01_clean <- mask_non_grabs(SSM01, "SSM01")
-SSM20_clean <- mask_non_grabs(SSM20, "SSM20")
-SST13_clean <- mask_non_grabs(SST13, "SST13")
+SSM01_clean <- mask_non_grabs(SSM01, "SSM01 (raw fingerprint)")
+SSM20_clean <- mask_non_grabs(SSM20, "SSM20 (raw fingerprint)")
+SST13_clean <- mask_non_grabs(SST13, "SST13 (raw fingerprint)")
 
 # # 4. Verify the result
 # # Total rows should still be ~30,000
@@ -474,15 +487,15 @@ attributes(grab.matrixSST13)
 grab.spectraSSM01 = spectra(value = absSSM01, bands = wlSSM01, names = NumSSM01)
 message(sprintf("CHECKPOINT dim(grab.spectraSSM01) right after spectra() = %s", paste(dim(grab.spectraSSM01), collapse=" x ")))
 attributes(grab.spectraSSM01)
-plot(grab.spectraSSM01) # Note, bands here = absorbance from the scans
+plot(grab.spectraSSM01) 
 
 grab.spectraSSM20 = spectra(value = absSSM20, bands = wlSSM20, names = NumSSM20)
 attributes(grab.spectraSSM20)
-plot(grab.spectraSSM20) # Note, bands here = absorbance from the scans
+plot(grab.spectraSSM20) 
 
 grab.spectraSST13 = spectra(value = absSST13, bands = wlSST13, names = NumSST13)
 attributes(grab.spectraSST13)
-plot(grab.spectraSST13) # Note, bands here = absorbance from the scans
+plot(grab.spectraSST13) 
 
 #grab.spectra = as_spectra.list(grab.spectra, wave_unit = "wavenumber", measurement_nit = "absorbance")
 grab.spectraSSM01 = as.matrix(grab.spectraSSM01)
@@ -674,20 +687,20 @@ CTestSSM01 = spectralcal.dfSSM01
 # units, which is what you want for picking ncomp (it's the scale the
 # model is actually optimizing), but isn't directly readable in mg/L --
 # see the *_comps_natural.png plot below for that.
-CmodSSM01 = plsr(DOCSSM01_log ~ SpectraSSM01, ncomp = 6, data = CTrainSSM01, validation = "LOO") # usually ncomp is N-1 grab samples you have
+CmodSSM01 = plsr(DOCSSM01_log ~ SpectraSSM01, ncomp = 10, data = CTrainSSM01, validation = "LOO") # usually ncomp is N-1 grab samples you have
 summary(CmodSSM01) # optimized for 4 components
 
 # Plot RMSE of the predictions to optimize model (log(mg/L) scale)
 plot(RMSEP(CmodSSM01), legendpos = "topright")
-save_plot("SSM01_rmse.png", plot(RMSEP(CmodSSM01), legendpos = "topright"))
+save_plot("SSM01_raw_rmse.png", plot(RMSEP(CmodSSM01), legendpos = "topright"))
 
 # Plot predicted vs. measured from optimized model (log(mg/L) scale)
 # Pick the number of components with the least error
 # NOTE: This plot may be messy, given low number of grab samples 
-plot(CmodSSM01, ncomp = 1, asp = 1, line = TRUE,
-     main = "DOCSSM01, 1 comps, validation (log scale)")
-save_plot("SSM01_comps.png", plot(CmodSSM01, ncomp = 2, asp = 1, line = TRUE,
-     main = "DOCSSM01, 1 comps, validation (log scale)"))
+plot(CmodSSM01, ncomp = 5, asp = 1, line = TRUE,
+     main = "DOCSSM01 (raw), 1 comps, validation (log scale)")
+save_plot("SSM01_raw_comps.png", plot(CmodSSM01, ncomp = 5, asp = 1, line = TRUE,
+     main = "DOCSSM01 (raw), 1 comps, validation (log scale)"))
 
 # Same predicted-vs-measured comparison, but back-transformed to mg/L so
 # it's actually readable and comparable to the pre-log-transform version.
@@ -738,7 +751,7 @@ report_fit_stats <- function(df, site_name) {
 ssm01_cv_natural <- data.frame(
   Date      = cv_measured(grabcal.dfSSM01$Date, CmodSSM01),
   measured  = cv_measured(grabcal.dfSSM01$DOCSSM01, CmodSSM01),
-  predicted = exp(as.numeric(CmodSSM01$validation$pred[, 1, "2 comps"]))
+  predicted = exp(as.numeric(CmodSSM01$validation$pred[, 1, "5 comps"]))
 )
 # Which specific grab dates are behind the worst LOO-CV predictions --
 # check these against NPOC_high_rpd/bad_spec before dropping anything;
@@ -746,12 +759,12 @@ ssm01_cv_natural <- data.frame(
 # circular -- it removes whatever the model finds hardest, not
 # necessarily a genuinely bad sample).
 print(ssm01_cv_natural[order(-abs(ssm01_cv_natural$predicted - ssm01_cv_natural$measured)), ])
-report_fit_stats(ssm01_cv_natural, "SSM01")
-save_plot("SSM01_comps_natural.png", ggplot(ssm01_cv_natural, aes(x = measured, y = predicted)) +
+report_fit_stats(ssm01_cv_natural, "SSM01 (raw fingerprint)")
+save_plot("SSM01_raw_comps_natural.png", ggplot(ssm01_cv_natural, aes(x = measured, y = predicted)) +
   geom_point() +
   geom_text(aes(label = Date), vjust = -0.6, size = 2.6, color = "grey30") +  # grab-sample date next to each point, per Ariel-deck request
   geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
-  labs(title = "DOCSSM01, 1 comps, LOO-CV (log-fit, back-transformed to mg/L)",
+  labs(title = "DOCSSM01 (raw), 5 comps, LOO-CV (log-fit, back-transformed to mg/L)",
        x = "measured (mg/L)", y = "predicted (mg/L)") +
   theme_minimal())
 
@@ -761,13 +774,13 @@ save_plot("SSM01_comps_natural.png", ggplot(ssm01_cv_natural, aes(x = measured, 
 # Predict model! Model was fit on log(DOC), so back-transform with exp()
 # to get predictions back in mg/L -- everything downstream (plot, CSV)
 # expects mg/L, same as before the log-transform.
-predictedCSSM01_log = predict(CmodSSM01, ncomp = 1, newdata = spectralcal.dfSSM01) # use reduced error model
+predictedCSSM01_log = predict(CmodSSM01, ncomp = 5, newdata = spectralcal.dfSSM01) # use reduced error model
 predictedCSSM01 = exp(predictedCSSM01_log)
 str(predictedCSSM01)
 plot(predictedCSSM01)
-save_plot("SSM01_pred.png", plot(predictedCSSM01))
+save_plot("SSM01_raw_pred.png", plot(predictedCSSM01))
 
-write.csv(predictedCSSM01, file = "predicted/PredictedC_SSM01.csv") # <- this is your newly calibrated dataset!
+write.csv(predictedCSSM01, file = "predicted/PredictedC_SSM01_raw.csv") # <- this is your newly calibrated dataset!
 
 ## NOTE: If your s::can has significant drift (e.g., which often happens when there is biofouling), 
 # You might need to use a moving window approach to the calibraiton (i.e., calibrate 1 month at a time)
@@ -783,34 +796,34 @@ CTestSSM20 = spectralcal.dfSSM20
 # PLSR Model with "training" data, use # of grab samples - 1
 # LOO = Leave One Out cross-comparison
 # NOTE: fit on log(DOC) -- DOCSSM20_log -- see the log-transform block above.
-CmodSSM20 = plsr(DOCSSM20_log ~ SpectraSSM20, ncomp = 13, data = CTrainSSM20, validation = "LOO") # usually ncomp is N-1 grab samples you have
+CmodSSM20 = plsr(DOCSSM20_log ~ SpectraSSM20, ncomp = 12, data = CTrainSSM20, validation = "LOO") # usually ncomp is N-1 grab samples you have
 summary(CmodSSM20) # optimized for 4 components
 
 # Plot RMSE of the predictions to optimize model (log(mg/L) scale)
 plot(RMSEP(CmodSSM20), legendpos = "topright")
-save_plot("SSM20_rmse.png", plot(RMSEP(CmodSSM20), legendpos = "topright"))
+save_plot("SSM20_raw_rmse.png", plot(RMSEP(CmodSSM20), legendpos = "topright"))
 
 # Plot predicted vs. measured from optimized model (log(mg/L) scale)
 # Pick the number of components with the least error (in this case, x)
 # NOTE: This plot may be messy, given low number of grab samples 
-plot(CmodSSM20, ncomp = 2, asp = 1, line = TRUE,
-     main = "DOCSSM20, 2 comps, validation (log scale)")
-save_plot("SSM20_comps.png", plot(CmodSSM20, ncomp = 1, asp = 1, line = TRUE,
-     main = "DOCSSM20, 2 comps, validation (log scale)"))
+plot(CmodSSM20, ncomp = 1, asp = 1, line = TRUE,
+     main = "DOCSSM20 (raw), 1 comps, validation (log scale)")
+save_plot("SSM20_raw_comps.png", plot(CmodSSM20, ncomp = 1, asp = 1, line = TRUE,
+     main = "DOCSSM20 (raw), 1 comps, validation (log scale)"))
 
 # Back-transformed (mg/L) version of the same LOO-CV comparison
 ssm20_cv_natural <- data.frame(
   Date      = cv_measured(grabcal.dfSSM20$Date, CmodSSM20),
   measured  = cv_measured(grabcal.dfSSM20$DOCSSM20, CmodSSM20),
-  predicted = exp(as.numeric(CmodSSM20$validation$pred[, 1, "2 comps"]))
+  predicted = exp(as.numeric(CmodSSM20$validation$pred[, 1, "1 comps"]))
 )
 print(ssm20_cv_natural[order(-abs(ssm20_cv_natural$predicted - ssm20_cv_natural$measured)), ])
-report_fit_stats(ssm20_cv_natural, "SSM20")
-save_plot("SSM20_comps_natural.png", ggplot(ssm20_cv_natural, aes(x = measured, y = predicted)) +
+report_fit_stats(ssm20_cv_natural, "SSM20 (raw fingerprint)")
+save_plot("SSM20_raw_comps_natural.png", ggplot(ssm20_cv_natural, aes(x = measured, y = predicted)) +
   geom_point() +
   geom_text(aes(label = Date), vjust = -0.6, size = 2.6, color = "grey30") +  # grab-sample date next to each point, per Ariel-deck request
   geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
-  labs(title = "DOCSSM20, 2 comps, LOO-CV (log-fit, back-transformed to mg/L)",
+  labs(title = "DOCSSM20 (raw), 1 comps, LOO-CV (log-fit, back-transformed to mg/L)",
        x = "measured (mg/L)", y = "predicted (mg/L)") +
   theme_minimal())
 
@@ -823,9 +836,9 @@ predictedCSSM20 = exp(predictedCSSM20_log)
 str(predictedCSSM20)
 # Plot final predictions
 plot(predictedCSSM20)
-save_plot("SSM20_pred.png", plot(predictedCSSM20))
+save_plot("SSM20_raw_pred.png", plot(predictedCSSM20))
 
-write.csv(predictedCSSM20, file = "predicted/PredictedC_SSM20.csv") # <- this is your newly calibrated dataset!
+write.csv(predictedCSSM20, file = "predicted/PredictedC_SSM20_raw.csv") # <- this is your newly calibrated dataset!
 
 #################################################
 #### STEP 7: Develop PLSR training data sets ####
@@ -838,34 +851,34 @@ CTestSST13 = spectralcal.dfSST13
 # PLSR Model with "training" data, use # of grab samples - 1
 # LOO = Leave One Out cross-comparison
 # NOTE: fit on log(DOC) -- DOCSST13_log -- see the log-transform block above.
-CmodSST13 = plsr(DOCSST13_log ~ SpectraSST13, ncomp = 10, data = CTrainSST13, validation = "LOO") # usually ncomp is N-1 grab samples you have
+CmodSST13 = plsr(DOCSST13_log ~ SpectraSST13, ncomp = 11, data = CTrainSST13, validation = "LOO") # usually ncomp is N-1 grab samples you have
 summary(CmodSST13) # optimized for 4 components
 
 # Plot RMSE of the predictions to optimize model (log(mg/L) scale)
 plot(RMSEP(CmodSST13), legendpos = "topright")
-save_plot("SST13_rmse.png", plot(RMSEP(CmodSST13), legendpos = "topright"))
+save_plot("SST13_raw_rmse.png", plot(RMSEP(CmodSST13), legendpos = "topright"))
 
 # Plot predicted vs. measured from optimized model (log(mg/L) scale)
 # Pick the number of components with the least error
 # NOTE: This plot may be messy, given low number of grab samples 
-plot(CmodSST13, ncomp = 9, asp = 1, line = TRUE,
-     main = "DOCSST13, 9 comps, validation (log scale)")
-save_plot("SST13_comps.png", plot(CmodSST13, ncomp = 9, asp = 1, line = TRUE,
-     main = "DOCSST13, 9 comps, validation (log scale)"))
+plot(CmodSST13, ncomp = 8, asp = 1, line = TRUE,
+     main = "DOCSST13 (raw), 4 comps, validation (log scale)")
+save_plot("SST13_raw_comps.png", plot(CmodSST13, ncomp = 1, asp = 1, line = TRUE,
+     main = "DOCSST13 (raw), 4 comps, validation (log scale)"))
 
 # Back-transformed (mg/L) version of the same LOO-CV comparison
 sst13_cv_natural <- data.frame(
   Date      = cv_measured(grabcal.dfSST13$Date, CmodSST13),
   measured  = cv_measured(grabcal.dfSST13$DOCSST13, CmodSST13),
-  predicted = exp(as.numeric(CmodSST13$validation$pred[, 1, "9 comps"]))
+  predicted = exp(as.numeric(CmodSST13$validation$pred[, 1, "8 comps"]))
 )
 print(sst13_cv_natural[order(-abs(sst13_cv_natural$predicted - sst13_cv_natural$measured)), ])
-report_fit_stats(sst13_cv_natural, "SST13")
-save_plot("SST13_comps_natural.png", ggplot(sst13_cv_natural, aes(x = measured, y = predicted)) +
+report_fit_stats(sst13_cv_natural, "SST13 (raw fingerprint)")
+save_plot("SST13_raw_comps_natural.png", ggplot(sst13_cv_natural, aes(x = measured, y = predicted)) +
   geom_point() +
   geom_text(aes(label = Date), vjust = -0.6, size = 2.6, color = "grey30") +  # grab-sample date next to each point, per Ariel-deck request
   geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
-  labs(title = "DOCSST13, 9 comps, LOO-CV (log-fit, back-transformed to mg/L)",
+  labs(title = "DOCSST13 (raw), 8 comps, LOO-CV (log-fit, back-transformed to mg/L)",
        x = "measured (mg/L)", y = "predicted (mg/L)") +
   theme_minimal())
 
@@ -873,7 +886,7 @@ save_plot("SST13_comps_natural.png", ggplot(sst13_cv_natural, aes(x = measured, 
 #### STEP 8: Make predictions based on reduced-error PLSR model #### 
 ####################################################################
 # Predict model! Back-transform with exp() -- model was fit on log(DOC).
-predictedCSST13_log = predict(CmodSST13, ncomp = 9, newdata = spectralcal.dfSST13) # use reduced error model
+predictedCSST13_log = predict(CmodSST13, ncomp = 8, newdata = spectralcal.dfSST13) # use reduced error model
 predictedCSST13 = exp(predictedCSST13_log)
 str(predictedCSST13)
 # Plot -- for display only, exclude physically-implausible predictions
@@ -882,34 +895,34 @@ str(predictedCSST13)
 # log-scale error blows up to an absurd value and squashes the rest of
 # the plot flat. 1000 mg/L is a generous ceiling -- no South Sandy DOC
 # reading has ever approached it, so this only catches that blow-up, not
-# a real high-DOC event. PredictedC_SST13.csv below still gets the
+# a real high-DOC event. PredictedC_SST13_raw.csv below still gets the
 # FULL, unfiltered prediction record -- nothing is dropped from the
 # actual output, only from this one figure.
 n_implausible <- sum(predictedCSST13 > 1000, na.rm = TRUE)
 if (n_implausible > 0) {
-  message(sprintf("SST13: excluding %d implausible predicted value(s) (>1000 mg/L, extrapolation artifact) from the plot only -- PredictedC_SST13.csv still has the full record.", n_implausible))
+  message(sprintf("SST13: excluding %d implausible predicted value(s) (>1000 mg/L, extrapolation artifact) from the plot only -- PredictedC_SST13_raw.csv still has the full record.", n_implausible))
 }
 predictedCSST13_plot <- predictedCSST13
 predictedCSST13_plot[predictedCSST13_plot > 1000] <- NA
 plot(predictedCSST13_plot)
-save_plot("SST13_pred.png", plot(predictedCSST13_plot))
+save_plot("SST13_raw_pred.png", plot(predictedCSST13_plot))
 
-write.csv(predictedCSST13, file = "predicted/PredictedC_SST13.csv") # <- this is your newly calibrated dataset! (full record, unfiltered)
+write.csv(predictedCSST13, file = "predicted/PredictedC_SST13_raw.csv") # <- this is your newly calibrated dataset! (full record, unfiltered)
 
 # 1. Loadings Plot for SSM01 (Opposite Trend)
 # This shows how the wavelengths contribute to each component (ncomp = 1, 2, 3, etc.)
-save_plot("SSM01_loadings.png", plot(CmodSSM01, plottype = "loading",
+save_plot("SSM01_raw_loadings.png", plot(CmodSSM01, plottype = "loading",
      comps = 1:2, # Plot the first two components for initial inspection
      main = "SSM01 NO3-N PLSR Loadings"))
 
 # 2. Loadings Plot for SSM20 (Flat Trend)
-save_plot("SSM20_loadings.png", plot(CmodSSM20, plottype = "loading",
+save_plot("SSM20_raw_loadings.png", plot(CmodSSM20, plottype = "loading",
      comps = 1:2, # Plot the first two components
      main = "SSM20 NO3-N PLSR Loadings"))
 
 # 3. Loadings Plot for SST13 (Flat Trend)
 # Examine the first few components for SST13
-save_plot("SST13_loadings.png", plot(CmodSST13, plottype = "loading",
+save_plot("SST13_raw_loadings.png", plot(CmodSST13, plottype = "loading",
      comps = 1:2, # Plot the first two components
      main = "SST13 NO3-N PLSR Loadings"))
 
@@ -928,17 +941,17 @@ pred_df20 <- data.frame(
 # vector). Only affects this figure; pred_df itself keeps every row.
 pred_df_plot01 <- pred_df01
 pred_df_plot01$Predicted[pred_df_plot01$Predicted > 1000] <- NA
-save_plot("SSM01_predicted_timeseries.png", ggplot(pred_df_plot01, aes(x = DateTime, y = Predicted)) +
-  geom_point(color = "steelblue") +
-  labs(
-    x = "DateTime",
-    y = "Predicted DOC (mg/L)",
-    title = "Predicted DOC over Time (SSM01)"
-  ) +
-  theme_minimal())
+save_plot("SSM01_predicted_timeseries_raw.png", ggplot(pred_df_plot01, aes(x = DateTime, y = Predicted)) +
+            geom_point(color = "steelblue") +
+            labs(
+              x = "DateTime",
+              y = "Predicted DOC (mg/L)",
+              title = "Predicted DOC over Time (SSM01)"
+            ) +
+            theme_minimal())
 pred_df_plot13 <- pred_df13
 pred_df_plot13$Predicted[pred_df_plot13$Predicted > 1000] <- NA
-save_plot("SST13_predicted_timeseries.png", ggplot(pred_df_plot13, aes(x = DateTime, y = Predicted)) +
+save_plot("SST13_predicted_timeseries_raw.png", ggplot(pred_df_plot13, aes(x = DateTime, y = Predicted)) +
             geom_point(color = "steelblue") +
             labs(
               x = "DateTime",
@@ -949,7 +962,7 @@ save_plot("SST13_predicted_timeseries.png", ggplot(pred_df_plot13, aes(x = DateT
 
 pred_df_plot20 <- pred_df20
 pred_df_plot20$Predicted[pred_df_plot20$Predicted > 1000] <- NA
-save_plot("SSM20_predicted_timeseries.png", ggplot(pred_df_plot20, aes(x = DateTime, y = Predicted)) +
+save_plot("SSM20_predicted_timeseries_raw.png", ggplot(pred_df_plot20, aes(x = DateTime, y = Predicted)) +
             geom_point(color = "steelblue") +
             labs(
               x = "DateTime",
@@ -966,6 +979,6 @@ save_plot("SSM20_predicted_timeseries.png", ggplot(pred_df_plot20, aes(x = DateT
 drive_folder_id <- "13bh64kWtdgknMUqdfDKkJ4JAzvWqLpu8"
 
 # Upload the file to the specified Google Drive folder
-drive_put(media = "predicted/PredictedC_SSM01.csv", path = as_id(drive_folder_id))
-drive_put(media = "predicted/PredictedC_SSM20.csv", path = as_id(drive_folder_id))
-drive_put(media = "predicted/PredictedC_SST13.csv", path = as_id(drive_folder_id))
+drive_put(media = "predicted/PredictedC_SSM01_raw.csv", path = as_id(drive_folder_id))
+drive_put(media = "predicted/PredictedC_SSM20_raw.csv", path = as_id(drive_folder_id))
+drive_put(media = "predicted/PredictedC_SST13_raw.csv", path = as_id(drive_folder_id))

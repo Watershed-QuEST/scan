@@ -20,39 +20,122 @@ file.remove(files)
 ##########################
 #### Import scan data ####
 ##########################
-#### list and download all files in the folder ####
+#### list, download once, and read BOTH sheets from that same local file ####
 # this is the "raw" folder
 scan <- googledrive::as_id("https://drive.google.com/drive/folders/1x6tPgXn-DgmBVvFTMG0TEo2AxqHqQLwV")
 # list all CSV files in the folder
 scan_csvs <- googledrive::drive_ls(path = scan)
-3
 
-# create empty list to store data frames
-scan_list_param <- list()
+# Retry wrapper so one stalled/flaky transfer doesn't kill the whole loop.
+# Google Drive downloads occasionally hang (curl "Operation too slow" after
+# ~10 min of near-zero throughput); this retries a few times with a short
+# pause before giving up on that one file and moving on.
+download_with_retry <- function(file, path, max_tries = 3, wait_sec = 15) {
+  for (attempt in seq_len(max_tries)) {
+    ok <- tryCatch({
+      googledrive::drive_download(file = file, path = path, overwrite = TRUE)
+      TRUE
+    }, error = function(e) {
+      message(sprintf("  attempt %d/%d failed for %s: %s", attempt, max_tries, path, conditionMessage(e)))
+      FALSE
+    })
+    if (isTRUE(ok)) return(TRUE)
+    if (attempt < max_tries) Sys.sleep(wait_sec)
+  }
+  FALSE
+}
 
-# loop over each file in the `scan_csvs` data frame
-for (i in seq_along(scan_csvs$id)) {
-  # define the local file path
+# Each xlsx has the params on sheet 1, the compensated fingerprint (abs) on
+# sheet 2, and the raw (uncompensated) fingerprint on sheet 3 -- download it
+# ONCE per file and read all three sheets from the same local copy.
+#
+# CHANGED (Sep 28), two fixes:
+# 1. Downloads are the slow part (network-bound, one file at a time used to
+#    mean waiting on ~N sequential Drive round-trips). Split into two
+#    phases: download all files in parallel first (parallel::mclapply --
+#    base R, no extra package needed, fork-based so Mac/Linux only, which
+#    is what this runs on), THEN read them sequentially from local disk
+#    (fast, no network involved). Downloading is embarrassingly parallel
+#    across files, so this should meaningfully cut wall-clock time.
+# 2. Some raw-fingerprint (sheet 3) files don't have a "Measured status"
+#    column at all -- the old `!c(DateTime, 'Measured status')` selector
+#    requires that column to exist and errors out ("Column `Measured
+#    status` doesn't exist"), which stopped the ENTIRE loop on the first
+#    file missing it. Switched to `!any_of(c("DateTime", "Measured
+#    status"))` -- any_of() is a tidyselect helper that silently ignores
+#    names that aren't present, instead of erroring. Also wrapped each
+#    file's whole read/parse step in tryCatch so any other per-file error
+#    (a malformed sheet, an unexpected layout, etc.) skips just that file
+#    -- logged to failed_reads and reported at the end -- instead of
+#    halting the whole run.
+n_workers <- max(1, parallel::detectCores() - 1)
+message(sprintf("Downloading %d files (%d in parallel)...", nrow(scan_csvs), n_workers))
+
+download_ok <- unlist(parallel::mclapply(seq_along(scan_csvs$id), function(i) {
   local_path <- file.path("googledrive", scan_csvs$name[i])
-  
-  # download the file
-  googledrive::drive_download(
-    file = scan_csvs$id[i],
-    path = local_path,
-    overwrite = TRUE
-  )
-  
-  # read the header row (row 2)
-  header <- read_excel(local_path, skip = 1, n_max = 1, col_names = FALSE)
-  # convert the header to a character vector and clean empty names
-  col_names <- as.character(unlist(header[1, ]))
-  col_names[col_names == ""] <- paste0("X", seq_along(col_names[col_names == ""]))
-  
-  # read the data starting from row 4 using the header as column names
-  data <- read_excel(local_path, skip = 4, col_names = col_names)
-  
-  # store the data in the list
-  scan_list_param[[scan_csvs$name[i]]] <- data
+  download_with_retry(file = scan_csvs$id[i], path = local_path, max_tries = 3, wait_sec = 15)
+}, mc.cores = n_workers))
+
+failed_downloads <- scan_csvs$name[!download_ok]
+if (length(failed_downloads) > 0) {
+  warning("The following files failed to download after retries and were skipped:\n",
+          paste(" -", failed_downloads, collapse = "\n"))
+}
+
+scan_list_param <- list()  # sheet 1: params
+scan_list       <- list()  # sheet 2: compensated fingerprint / abs
+scan_list_raw   <- list()  # sheet 3: raw (uncompensated) fingerprint
+failed_reads    <- character(0)
+
+# loop over each SUCCESSFULLY DOWNLOADED file and read it (local disk, fast)
+for (i in seq_along(scan_csvs$id)) {
+  if (!download_ok[i]) next
+  local_path <- file.path("googledrive", scan_csvs$name[i])
+
+  result <- tryCatch({
+    #### sheet 1: params ####
+    header_param <- read_excel(local_path, skip = 1, n_max = 1, col_names = FALSE)
+    col_names_param <- as.character(unlist(header_param[1, ]))
+    col_names_param[col_names_param == ""] <- paste0("X", seq_along(col_names_param[col_names_param == ""]))
+    data_param <- read_excel(local_path, skip = 4, col_names = col_names_param)
+
+    #### sheet 2: compensated fingerprint / abs ####
+    header_abs <- read_excel(local_path, sheet = 2, skip = 1, n_max = 1, col_names = FALSE)
+    col_names_abs <- as.character(unlist(header_abs[1, ]))
+    col_names_abs[col_names_abs == ""] <- paste0("X", seq_along(col_names_abs[col_names_abs == ""]))
+    data_abs <- read_excel(local_path, sheet = 2, skip = 4, col_names = col_names_abs)
+    colnames(data_abs)[1] <- "DateTime"
+    data_abs <- data_abs %>%
+      mutate(across(!any_of(c("DateTime", "Measured status")), as.numeric))
+
+    #### sheet 3: raw (uncompensated) fingerprint ####
+    header_abs_raw <- read_excel(local_path, sheet = 3, skip = 1, n_max = 1, col_names = FALSE)
+    col_names_abs_raw <- as.character(unlist(header_abs_raw[1, ]))
+    col_names_abs_raw[col_names_abs_raw == ""] <- paste0("X", seq_along(col_names_abs_raw[col_names_abs_raw == ""]))
+    data_abs_raw <- read_excel(local_path, sheet = 3, skip = 4, col_names = col_names_abs_raw)
+    colnames(data_abs_raw)[1] <- "DateTime"
+    data_abs_raw <- data_abs_raw %>%
+      mutate(across(!any_of(c("DateTime", "Measured status")), as.numeric))
+
+    list(param = data_param, abs = data_abs, abs_raw = data_abs_raw)
+  }, error = function(e) {
+    message(sprintf("  failed to read/parse %s: %s", scan_csvs$name[i], conditionMessage(e)))
+    NULL
+  })
+
+  if (is.null(result)) {
+    failed_reads <- c(failed_reads, scan_csvs$name[i])
+    next
+  }
+
+  scan_list_param[[scan_csvs$name[i]]] <- result$param
+  scan_list[[scan_csvs$name[i]]]       <- result$abs
+  scan_list_raw[[scan_csvs$name[i]]]   <- result$abs_raw
+}
+
+if (length(failed_reads) > 0) {
+  warning("The following files downloaded but failed to read/parse and were skipped:\n",
+          paste(" -", failed_reads, collapse = "\n"))
 }
 
 ####################################
@@ -105,7 +188,11 @@ combined_by_site <- lapply(combined_by_site, function(df) {
 })
 
 lapply(names(combined_by_site), function(site) {
-  write.csv(combined_by_site[[site]], file.path("data", paste0(site, "_params.csv")))
+  # row.names = FALSE to match the _abs.csv write below -- without it, R
+  # writes an extra unnamed leading row-index column, which read.csv() on
+  # the other end turns into a stray "X" column (already dropped as junk
+  # in 02_SS_clean.R, but there's no reason to write it in the first place).
+  write.csv(combined_by_site[[site]], file.path("data", paste0(site, "_params.csv")), row.names = FALSE)
 })
   
 lapply(names(combined_by_site), function(site) {
@@ -120,48 +207,10 @@ lapply(names(combined_by_site), function(site) {
 })
   
 ##==============================================================================
-## now we need to do the same thing but for the compensated abs tab
-## abs file is in the same excel in second tab of file
+## now we combine the compensated abs tab (sheet 2 of the same excel files)
+## -- already read into `scan_list` in the combined download loop above, so
+## there's nothing left to download or read here.
 ##==============================================================================
-##########################
-#### Import scan data #### 
-##########################
-# create empty list to store data frames
-scan_list <- list()
-
-# loop over each file in the `scan_csvs` data frame
-for (i in seq_along(scan_csvs$id)) {
-  # define the local file path
-  local_path <- file.path("googledrive", scan_csvs$name[i])
-  
-  # download the file
-  googledrive::drive_download(
-    file = scan_csvs$id[i],
-    path = local_path,
-    overwrite = TRUE
-  )
-  
-  # read the header row (row 2)
-  header <- read_excel(local_path, sheet = 2, skip = 1, n_max = 1, col_names = FALSE)
-  # convert the header to a character vector and clean empty names
-  col_names <- as.character(unlist(header[1, ]))
-  col_names[col_names == ""] <- paste0("X", seq_along(col_names[col_names == ""]))
-  
-  # read the data starting from row 4 using the header as column names
-  data <- read_excel(local_path,sheet = 2, skip = 4, col_names = col_names)
-  
-  # Clean the 'DateTime' column name.
-  colnames(data)[1] <- "DateTime"
-  
-  # Force all columns (except DateTime) to be numeric ***
-    data <- data %>%
-    # Use across() to target all columns EXCEPT 'DateTime' and Measured.status
-    mutate(across(!c(DateTime, 'Measured status'), as.numeric))
-  # Note: Any non-numeric value in a spectral column will become NA here.
-  
-  # store the data in the list
-  scan_list[[scan_csvs$name[i]]] <- data
-}
 
 ####################################
 #### Combine data for each site ####
@@ -217,9 +266,9 @@ combined_by_site <- lapply(scan_list_by_site, function(site_data_list) {
 SSM20_EXAMPLE <- scan_list$"2024-09-06_SSM20_SN24160203.xlsx"
 SSM20_combined <- combined_by_site$SSM20
 
-##########################
+###############
 #### Clean ####
-##########################
+###############
 combined_by_site <- lapply(scan_list_by_site, function(site_data_list) {
   
   # Step A: Label every row in every file before merging
@@ -292,11 +341,110 @@ lapply(names(combined_by_site), function(site) {
   )
 })
 
+##==============================================================================
+## NEW (Sep 25): same combine/clean/save steps as above, but for the RAW
+## (uncompensated) fingerprint from sheet 3 -- scan_list_raw, read alongside
+## sheet 2 in the download loop above. This produces a parallel
+## <site>_abs_raw.csv next to <site>_abs.csv so the raw version can be run
+## through calibration and compared against the compensated one (Ariel's
+## suggestion -- see script-unification-todo.md). Identical logic to the
+## compensated block above, just renamed to _raw throughout so nothing here
+## collides with or overwrites the compensated variables.
+##==============================================================================
+
+####################################
+#### Combine data for each site (raw) ####
+####################################
+scan_list_by_site_raw <- lapply(site_names, function(site) {
+  site_files <- names(scan_list_raw)[grepl(site, names(scan_list_raw))]
+  scan_list_raw[site_files]
+})
+names(scan_list_by_site_raw) <- site_names
+
+combined_by_site_raw <- lapply(scan_list_by_site_raw, function(site_data_list) {
+  all_names <- unique(unlist(lapply(site_data_list, names)))
+
+  site_data_list_aligned <- lapply(site_data_list, function(df) {
+    missing_cols <- setdiff(all_names, names(df))
+    for (col in missing_cols) {
+      df[[col]] <- NA_real_
+    }
+    df <- df[, all_names]
+    return(df)
+  })
+
+  bind_rows(site_data_list_aligned) %>%
+    arrange(DateTime) %>%
+    distinct(DateTime, .keep_all = TRUE)
+})
+
+###############
+#### Clean (raw) ####
+###############
+combined_by_site_raw <- lapply(scan_list_by_site_raw, function(site_data_list) {
+
+  processed_files <- lapply(site_data_list, function(df) {
+    df$DateTime <- as.POSIXct(df$DateTime)
+    current_spec_cols <- grep("^[0-9]", colnames(df))
+    df$row_variance <- apply(df[, current_spec_cols, drop = FALSE], 1, sd, na.rm = TRUE)
+    df$temp_status <- ifelse(!is.na(df$row_variance) & df$row_variance > 0.001, "Good", "Corrupted")
+    return(df)
+  })
+
+  bind_rows(processed_files) %>%
+    group_by(DateTime) %>%
+    arrange(DateTime, desc(temp_status), desc(row_variance)) %>%
+    mutate(
+      Status = case_when(
+        n() == 1 & first(temp_status) == "Good" ~ "Original_Good",
+        n() > 1 & first(temp_status) == "Good" ~ "Replaced_Good",
+        first(temp_status) == "Corrupted" ~ "Corrupted_No_Match",
+        TRUE ~ "Original_Good"
+      )
+    ) %>%
+    slice(1) %>%
+    ungroup() %>%
+    select(-row_variance, -temp_status)
+})
+
+SSM01_raw_clean <- combined_by_site_raw[["SSM01"]]
+SSM20_raw_clean <- combined_by_site_raw[["SSM20"]]
+SST13_raw_clean <- combined_by_site_raw[["SST13"]]
+
+nrow(bind_rows(scan_list_by_site_raw[["SSM01"]])) - nrow(SSM01_raw_clean)
+nrow(bind_rows(scan_list_by_site_raw[["SSM20"]])) - nrow(SSM20_raw_clean)
+nrow(bind_rows(scan_list_by_site_raw[["SST13"]])) - nrow(SST13_raw_clean)
+
+##############################
+#### Save combined files (raw) ####
+##############################
+combined_by_site_raw <- lapply(combined_by_site_raw, function(df) {
+  df$DateTime <- format(df$DateTime, "%Y-%m-%d %H:%M:%S")
+  return(df)
+})
+
+lapply(names(combined_by_site_raw), function(site) {
+  write.csv(
+    combined_by_site_raw[[site]],
+    file.path("data", paste0(site, "_abs_raw.csv")),
+    row.names = FALSE
+  )
+})
+
+lapply(names(combined_by_site_raw), function(site) {
+  file <- paste0("data/", site, "_abs_raw.csv")
+  drive_folder_id <- "1qpsqrmcnALNS9OVtoIDICdEuW5LkVuIR"
+  drive_put(
+    media = file,
+    path = as_id(drive_folder_id)
+  )
+})
+
 # #### --------------------------------------------------------------------- ####
 # #####################################################################
 # ## 1. SETUP: LIST, DOWNLOAD, AND CLEAN INDIVIDUAL FILES
 # #####################################################################
-# # Define the Google Drive folder ID/URL
+# # Define the Google Drive folder 
 # drive_id <- as_id("1x6tPgXn-DgmBVvFTMG0TEo2AxqHqQLwV")
 # # List all files in the folder
 # scan_csvs <- drive_ls(path = drive_id)

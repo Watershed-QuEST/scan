@@ -20,22 +20,22 @@ merged <- googledrive::drive_ls(path = scan, type = "csv")
 3
 
 #USF12
-googledrive::drive_download(file = merged$id[merged$name=="USF12_chem_Buttercup.csv"], 
-                            path = "googledrive/USF12_chem_Buttercup.csv",
+googledrive::drive_download(file = merged$id[merged$name=="USF12_chem.csv"], 
+                            path = "googledrive/USF12_chem.csv",
                             overwrite = T)
 #USF20
-googledrive::drive_download(file = merged$id[merged$name=="USF20_chem_Blossom.csv"], 
-                            path = "googledrive/USF20_chem_Blossom.csv",
+googledrive::drive_download(file = merged$id[merged$name=="USF20_chem.csv"], 
+                            path = "googledrive/USF20_chem.csv",
                             overwrite = T)
 #USF21
-googledrive::drive_download(file = merged$id[merged$name=="USF21_chem_Bubbles.csv"], 
-                            path = "googledrive/USF21_chem_Bubbles.csv",
+googledrive::drive_download(file = merged$id[merged$name=="USF21_chem.csv"], 
+                            path = "googledrive/USF21_chem.csv",
                             overwrite = T)
 
 # Let's load them separately first
-USF12 <- read.csv("googledrive/USF12_chem_Buttercup.csv", na = c("", "NaN", "Na", "NA")) # make sure this matches your non-detects)
-USF20 <- read.csv("googledrive/USF20_chem_Blossom.csv", na = c("", "NaN", "Na", "NA")) # make sure this matches your non-detects)
-USF21 <- read.csv("googledrive/USF21_chem_Bubbles.csv", na = c("", "NaN", "Na", "NA")) # make sure this matches your non-detects)
+USF12 <- read.csv("googledrive/USF12_chem.csv", na = c("", "NaN", "Na", "NA")) # make sure this matches your non-detects)
+USF20 <- read.csv("googledrive/USF20_chem.csv", na = c("", "NaN", "Na", "NA")) # make sure this matches your non-detects)
+USF21 <- read.csv("googledrive/USF21_chem.csv", na = c("", "NaN", "Na", "NA")) # make sure this matches your non-detects)
 
 # DateTime at midnight is missing 00:00:00 time, so filling in that time using grep                     
 USF12$DateTime[grep("[0-9]{4}-[0-9]{2}-[0-9]{2}$",USF12$DateTime)] <- paste(
@@ -88,7 +88,7 @@ process_and_plot_month <- function(data_frame, df_name, month_year_label) {
   }
   
   # b. Index spectral data (columns 19 to 228, as in your original script)
-  scan.spec <- data_month[19:228]
+  scan.spec <- data_month[17:118]
   
   # c. Create absorbance object
   abs_data <- scan.spec

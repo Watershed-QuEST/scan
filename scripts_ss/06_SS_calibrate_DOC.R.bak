@@ -13,46 +13,6 @@ library(spectrolab)
 library(ggplot2)
 library(plotly)
 
-# Defensive insurance against a real bug hit today: if this script is run
-# interactively in chunks (rather than sourced top-to-bottom in one clean
-# pass) and an earlier run errored out partway through, a png() device from
-# that earlier run can be left open. A later save_plot() call can then write
-# to -- or pick up leftover content from -- the wrong device, so one site's
-# PNG silently ends up holding another site's plot (this happened: SSM01's
-# comps_natural.png came out holding SST13's plot instead). graphics.off()
-# force-closes every open graphics device before this script opens any of
-# its own, so a stray device from a previous partial run can't contaminate
-# this one. Still best to run the whole script top-to-bottom in one go
-# rather than by selection.
-graphics.off()
-
-######################################################
-#### Spectral wavelength cutoff (testable, Sep 25) ###
-######################################################
-# The predictor spectrum was hardcoded to columns [17:117], i.e. every
-# retained wavelength from 200-450nm. We discussed testing a narrower
-# range (e.g. cutting off around 300-350nm instead of 450nm) -- DOC's
-# strongest/most informative UV-Vis signal is typically in the UV region
-# (~200-300nm; a254 is the classic single-wavelength DOC proxy), so a lot
-# of the 350-450nm range may just be adding noisy/uninformative predictors
-# to the PLSR fit without adding real DOC signal. This makes that cutoff a
-# single tunable constant instead of six hardcoded [17:117] slices, so it's
-# easy to try different values and rerun.
-#
-# Change ONLY this line to test a different cutoff (e.g. 300, 350):
-DOC_WL_MAX <- 450
-
-# Selects the column *positions* (not names) in df whose header is a
-# wavelength (matches "200.00", "202.50", etc -- the format left after
-# rename_columns() strips "X"/".nm") and whose numeric value is
-# <= DOC_WL_MAX. Works on SSM01/SSM20/SST13 and on grab_SSM01/etc (same
-# columns, fewer rows) since both keep the original column names.
-spec_col_idx <- function(df, wl_max = DOC_WL_MAX) {
-  wl_col <- grep("^[0-9]+\\.[0-9]+$", colnames(df))
-  wl_val <- as.numeric(colnames(df)[wl_col])
-  wl_col[wl_val <= wl_max]
-}
-
 ######################################
 #### Auto-save calibration figures ###
 ######################################
@@ -151,9 +111,9 @@ scan_DOC_SSM20 <- xts(SSM20$DOC_mg.l, order.by = SSM20$DateTime)
 scan_DOC_SST13 <- xts(SST13$DOC_mg.l, order.by = SST13$DateTime)
 
 # Extract spectral data (assuming spectral columns are in range "SSM200.00.nm" to "4.00.nm")
-scan.specSSM01 = xts(SSM01[spec_col_idx(SSM01)], as.POSIXct(SSM01$DateTime, format = "%Y-%m-%d %H:%M:%S")) 
-scan.specSSM20 = xts(SSM20[spec_col_idx(SSM20)], as.POSIXct(SSM20$DateTime, format = "%Y-%m-%d %H:%M:%S")) 
-scan.specSST13 = xts(SST13[spec_col_idx(SST13)], as.POSIXct(SST13$DateTime, format = "%Y-%m-%d %H:%M:%S")) 
+scan.specSSM01 = xts(SSM01[17:117], as.POSIXct(SSM01$DateTime, format = "%Y-%m-%d %H:%M:%S")) 
+scan.specSSM20 = xts(SSM20[17:117], as.POSIXct(SSM20$DateTime, format = "%Y-%m-%d %H:%M:%S")) 
+scan.specSST13 = xts(SST13[17:117], as.POSIXct(SST13$DateTime, format = "%Y-%m-%d %H:%M:%S")) 
 # select full spectra
 # note here that if there are 0s in your spectra, this code will throw an error
 # so only use the wavelengths where you have detectable absorbance
@@ -172,110 +132,50 @@ scan.specSST13 = xts(SST13[spec_col_idx(SST13)], as.POSIXct(SST13$DateTime, form
 # Modify the Grab_sample column
 SSM01 <- SSM01 %>% 
   mutate(Grab_sample = case_when(
-    !is.na(Site) & Site != "" ~ "Y",  # Assign "Y" if data exists
+    !is.na(Sample.Name) & Sample.Name != "" ~ "Y",  # Assign "Y" if data exists
     TRUE ~ NA_character_  # Leave as NA otherwise
   ))
 
 SSM20 <- SSM20 %>% 
   mutate(Grab_sample = case_when(
-    !is.na(Site) & Site != "" ~ "Y",
+    !is.na(Sample.Name) & Sample.Name != "" ~ "Y",
     TRUE ~ NA_character_
   ))
 
 SST13 <- SST13 %>% 
   mutate(Grab_sample = case_when(
-    !is.na(Site) & Site != "" ~ "Y",
+    !is.na(Sample.Name) & Sample.Name != "" ~ "Y",
     TRUE ~ NA_character_
   ))
 
 #########################################################
 #### Drop MDL-replaced grab samples from calibration ####
 #########################################################
-# UPDATED (Sep 24): now that 05_SS_merge_grabsamples_and_scan.R sources
-# chem_raw_flagged.csv and averages replicates itself, each grab sample
-# carries an NPOC-SPECIFIC flag (NPOC_flagged_any) instead of the old
-# n_below_MDL, which counted MDL hits across every analyte (NH4, PO4,
-# Cl...) and was dropping samples whose actual NPOC reading was fine. We
-# only exclude on NPOC_flagged_any now. NPOC_high_rpd (replicates
-# disagreeing by >20%) is a real QC concern too, but averaging vs. dropping
-# a high-RPD sample is a judgment call -- it's reported via message() and
-# left IN the calibration set rather than auto-dropped; revisit per-site
-# if these turn out to be leverage points in the fit.
+# n_below_MDL > 0 means at least one of that averaged NPOC value's
+# replicates was below the method detection limit and got substituted
+# before averaging -- so the reported concentration isn't a real
+# measurement for some fraction of its replicates. Setting Grab_sample
+# back to NA for those rows drops them from BOTH grab_SSM01/grab.DOCSSM01
+# below AND from mask_non_grabs()'s spectral masking further down (both
+# key off this same Grab_sample column), so the exclusion is consistent
+# everywhere a "grab sample" is used, not just in one place.
 drop_mdl_replaced <- function(df, site_name) {
   # Every term here is explicitly NA-guarded so is_mdl is a clean TRUE/FALSE
   # vector with no NAs -- df$Grab_sample[is_mdl] <- ... errors ("NAs are not
   # allowed in subscripted assignments") if is_mdl itself contains NA, which
   # a plain `df$Grab_sample == "Y"` would for the ~30,000 non-grab rows.
   is_mdl <- !is.na(df$Grab_sample) & df$Grab_sample == "Y" &
-    !is.na(df$NPOC_flagged_any) & df$NPOC_flagged_any
+    !is.na(df$n_below_MDL) & df$n_below_MDL > 0
   n_mdl <- sum(is_mdl)
   if (n_mdl > 0) {
-    message(sprintf("%s: dropping %d grab sample(s) with an MDL-flagged NPOC replicate from calibration.", site_name, n_mdl))
+    message(sprintf("%s: dropping %d grab sample(s) with an MDL-replaced value from calibration.", site_name, n_mdl))
   }
   df$Grab_sample[is_mdl] <- NA_character_
-
-  is_high_rpd <- !is.na(df$Grab_sample) & df$Grab_sample == "Y" &
-    !is.na(df$NPOC_high_rpd) & df$NPOC_high_rpd
-  n_high_rpd <- sum(is_high_rpd)
-  if (n_high_rpd > 0) {
-    message(sprintf("%s: %d grab sample(s) kept in calibration but have NPOC replicate RPD > 20%% (replicates disagreed) -- worth a manual look.", site_name, n_high_rpd))
-  }
-
-  # NEW (Sep 24): drop grab samples whose matched spectrum is flagged
-  # flat_spec (abnormally low absorbance dynamic range -- see
-  # flag_bad_spectra() in 05_SS_merge_grabsamples_and_scan.R). Unlike
-  # NPOC_high_rpd above, this IS auto-dropped: it's independent evidence
-  # the SPECTRUM itself is a bad/artifact reading (not just a hard case for
-  # the model), so training on it teaches the model a false spectrum-DOC
-  # relationship rather than a real one.
-  is_flat_spec <- !is.na(df$Grab_sample) & df$Grab_sample == "Y" &
-    !is.na(df$flat_spec) & df$flat_spec
-  n_flat_spec <- sum(is_flat_spec)
-  if (n_flat_spec > 0) {
-    message(sprintf("%s: dropping %d grab sample(s) with an abnormally flat (likely corrupted) spectrum from calibration.", site_name, n_flat_spec))
-  }
-  df$Grab_sample[is_flat_spec] <- NA_character_
-
-  # NEW (Sep 25): drop grab samples whose spectrum is flagged spec_spiky --
-  # a single wavelength jumping sharply off the smooth curve the rest of
-  # the spectrum follows, relative to that site's own typical grab-sample
-  # spectrum (see spec_spiky in 05_SS_merge_grabsamples_and_scan.R's
-  # flag_bad_spectra() for the full explanation and validation). Same
-  # auto-drop treatment as flat_spec: this is independent evidence the
-  # SPECTRUM is a bad reading, not just a hard case for the model. Deliberately
-  # does NOT catch SST13's two high-DOC anchors (2024-11-01, 2024-11-11) --
-  # that was checked directly against the data before picking the
-  # threshold in flag_bad_spectra().
-  is_spiky <- !is.na(df$Grab_sample) & df$Grab_sample == "Y" &
-    !is.na(df$spec_spiky) & df$spec_spiky
-  n_spiky <- sum(is_spiky)
-  if (n_spiky > 0) {
-    message(sprintf("%s: dropping %d grab sample(s) with a spiky/noisy spectrum from calibration.", site_name, n_spiky))
-  }
-  df$Grab_sample[is_spiky] <- NA_character_
-
   df
 }
 SSM01 <- drop_mdl_replaced(SSM01, "SSM01")
 SSM20 <- drop_mdl_replaced(SSM20, "SSM20")
 SST13 <- drop_mdl_replaced(SST13, "SST13")
-
-# TRIED (Sep 25) and REVERTED: explicitly dropping SST13's two high-DOC
-# grab samples (2024-11-01, NPOC = 63.74 mg/L; 2024-11-11, NPOC = 53.96
-# mg/L -- the top two in the site's range, next-highest is ~40) from
-# calibration. Neither is flagged by flat_spec/spec_spiky/MDL -- their
-# spectra are clean; this was a leverage/extrapolation call, not a
-# data-quality one, done because their LOO-CV predictions were unstable
-# (2024-11-11 alone was driving R2 = -202 once 2024-11-01 was already
-# removed). Reverted because removing them made things worse, not better:
-# with no high-DOC anchor left, the model had nothing to calibrate against
-# whenever the full deployment record hit a high-absorbance period, and
-# the resulting predicted-timeseries plot got visibly worse (uncontrolled
-# log-space extrapolation, not a stable prediction). Both points are kept
-# in calibration. This tension -- these are simultaneously the only real
-# high-DOC training anchors AND the most destabilizing points for LOO-CV
-# with so few samples -- is exactly the kind of question flagged for Ariel
-# rather than resolved by removing data.
 
 # Filter using "Grab_sample" column
 # NOTE: SSM01$Grab_sample == "Y" is NA (not FALSE) for the ~30,000 rows
@@ -291,31 +191,6 @@ grab_SSM01 = SSM01[!is.na(SSM01$Grab_sample) & SSM01$Grab_sample == "Y",]
 message(sprintf("CHECKPOINT nrow(grab_SSM01) = %d", nrow(grab_SSM01)))
 grab_SSM20 = SSM20[!is.na(SSM20$Grab_sample) & SSM20$Grab_sample == "Y",]
 grab_SST13 = SST13[!is.na(SST13$Grab_sample) & SST13$Grab_sample == "Y",]
-
-##########################################################################
-#### Save the complete abs record + the training abs (compensated) #####
-##########################################################################
-# "Complete abs record" = SSM01/SSM20/SST13 as they stand right here: the
-# full ~30,000-row deployment time series, post drop_mdl_replaced() (so
-# MDL/flat_spec/spec_spiky grab flags are already applied), same data the
-# predicted time series below is built from. "Training abs" = grab_SSM01/
-# grab_SSM20/grab_SST13, the grab-matched rows actually fed into plsr() as
-# calibration data. Saved together so it's easy to see exactly what the
-# model saw vs. the full record it's predicting over -- same "predicted"
-# Drive folder the PredictedC_*.csv files go to further down.
-write.csv(SSM01, "predicted/SSM01_complete_abs_record.csv", row.names = FALSE)
-write.csv(SSM20, "predicted/SSM20_complete_abs_record.csv", row.names = FALSE)
-write.csv(SST13, "predicted/SST13_complete_abs_record.csv", row.names = FALSE)
-write.csv(grab_SSM01, "predicted/SSM01_training_abs.csv", row.names = FALSE)
-write.csv(grab_SSM20, "predicted/SSM20_training_abs.csv", row.names = FALSE)
-write.csv(grab_SST13, "predicted/SST13_training_abs.csv", row.names = FALSE)
-abs_record_drive_folder_id <- "13bh64kWtdgknMUqdfDKkJ4JAzvWqLpu8"
-drive_put(media = "predicted/SSM01_complete_abs_record.csv", path = as_id(abs_record_drive_folder_id))
-drive_put(media = "predicted/SSM20_complete_abs_record.csv", path = as_id(abs_record_drive_folder_id))
-drive_put(media = "predicted/SST13_complete_abs_record.csv", path = as_id(abs_record_drive_folder_id))
-drive_put(media = "predicted/SSM01_training_abs.csv", path = as_id(abs_record_drive_folder_id))
-drive_put(media = "predicted/SSM20_training_abs.csv", path = as_id(abs_record_drive_folder_id))
-drive_put(media = "predicted/SST13_training_abs.csv", path = as_id(abs_record_drive_folder_id))
 
 grab.DOCSSM01 = grab_SSM01$NPOC..mg.C.L.
 grab.DOCSSM20 = grab_SSM20$NPOC..mg.C.L.
@@ -403,10 +278,10 @@ SST13_clean <- mask_non_grabs(SST13, "SST13")
 # Building this from grab_SSM01/etc instead (the already row-filtered
 # subset used to build grab.DOCSSM01 itself) guarantees each spectrum is
 # paired with its own correct DOC value, in the same order, same length.
-grab.spec.datSSM01 = grab_SSM01[spec_col_idx(grab_SSM01)]
+grab.spec.datSSM01 = grab_SSM01[17:117]
 message(sprintf("CHECKPOINT dim(grab.spec.datSSM01) = %s", paste(dim(grab.spec.datSSM01), collapse=" x ")))
-grab.spec.datSSM20 = grab_SSM20[spec_col_idx(grab_SSM20)]
-grab.spec.datSST13 = grab_SST13[spec_col_idx(grab_SST13)]
+grab.spec.datSSM20 = grab_SSM20[17:117]
+grab.spec.datSST13 = grab_SST13[17:117]
 
 # Rename columns for all data frames (e.g., SSM01, SSM20, SST13)
 rename_columns <- function(df) {
@@ -509,9 +384,9 @@ attributes(grab.spectraSST13)
 ########################################################################################
 # 1. Index FULL dataset with columns with absorbances
 # raw spectra
-scan.specSSM01 = SSM01[spec_col_idx(SSM01)]
-scan.specSSM20 = SSM20[spec_col_idx(SSM20)] 
-scan.specSST13 = SST13[spec_col_idx(SST13)]
+scan.specSSM01 = SSM01[17:117]
+scan.specSSM20 = SSM20[17:117] 
+scan.specSST13 = SST13[17:117]
 
 # 2. Create an absorbance matrix 
 # Rows = wavelength
@@ -619,13 +494,6 @@ str(grabcal.dfSSM20)
 grabcal.dfSST13 = data.frame(DOCSST13 = grab.DOCSST13, SpectraSST13 = I(grab.spectraSST13))
 str(grabcal.dfSST13)
 
-# Carry the sample's own Date along (not used for fitting -- just so we can
-# later identify WHICH calendar date a bad prediction/outlier belongs to,
-# instead of only knowing "row 7 of 13").
-grabcal.dfSSM01$Date <- grab_SSM01$Date
-grabcal.dfSSM20$Date <- grab_SSM20$Date
-grabcal.dfSST13$Date <- grab_SST13$Date
-
 ##########################################################################
 #### Log-transform DOC before fitting -- DOC error is typically        ####
 #### multiplicative (bigger absolute error at higher concentration),   ####
@@ -685,73 +553,22 @@ save_plot("SSM01_rmse.png", plot(RMSEP(CmodSSM01), legendpos = "topright"))
 # Pick the number of components with the least error
 # NOTE: This plot may be messy, given low number of grab samples 
 plot(CmodSSM01, ncomp = 1, asp = 1, line = TRUE,
-     main = "DOCSSM01, 1 comps, validation (log scale)")
+     main = "DOCSSM01, 2 comps, validation (log scale)")
 save_plot("SSM01_comps.png", plot(CmodSSM01, ncomp = 2, asp = 1, line = TRUE,
-     main = "DOCSSM01, 1 comps, validation (log scale)"))
+     main = "DOCSSM01, 2 comps, validation (log scale)"))
 
 # Same predicted-vs-measured comparison, but back-transformed to mg/L so
 # it's actually readable and comparable to the pre-log-transform version.
 # Uses the LOO-CV predictions already computed during fitting (not a second
 # fit), at the same ncomp as the plot above.
-# LOO-CV predictions (Cmod*$validation$pred) only cover the rows plsr()
-# actually used to fit. If any grab sample's spectrum has an NA band (or
-# its log-DOC is NA), plsr()'s default na.omit silently drops that row
-# before fitting -- but grabcal.df* still has the full row count, since
-# nothing upstream removed it. Building "measured" straight from
-# grabcal.df* without accounting for that is what caused "arguments imply
-# differing number of rows: 25, 21": 25 grab samples went into
-# CTrainSSM01, only 21 survived na.omit and have a validation$pred row.
-# This pulls out exactly the rows the model actually used, in the same
-# order, so measured/predicted always line up regardless of how many rows
-# get dropped.
-cv_measured <- function(response_vec, model) {
-  omitted <- if (!is.null(model$na.action)) as.integer(model$na.action) else integer(0)
-  if (length(omitted) > 0) response_vec[-omitted] else response_vec
-}
-
-# NEW (Sep 25): fit-quality numbers (R2, Pearson r, RMSE, MAE) for the
-# LOO-CV predicted-vs-measured comparison, on the natural (mg/L) scale --
-# same scale as the *_comps_natural.png plots, since that's what's
-# actually meaningful/reportable. R2 here is 1 - SS_res/SS_tot against the
-# 1:1 line (how PLSR's own R2 is defined for a validation set), NOT the
-# R2 of a separate best-fit regression line through the points -- so a
-# systematic bias (not just scatter) also lowers it, which is the right
-# behavior for a calibration check.
-report_fit_stats <- function(df, site_name) {
-  ok <- stats::complete.cases(df$measured, df$predicted)
-  m <- df$measured[ok]
-  p <- df$predicted[ok]
-  resid <- p - m
-  ss_res <- sum(resid^2)
-  ss_tot <- sum((m - mean(m))^2)
-  r2 <- 1 - ss_res / ss_tot
-  r <- suppressWarnings(cor(m, p))
-  rmse <- sqrt(mean(resid^2))
-  mae <- mean(abs(resid))
-  message(sprintf(
-    "%s LOO-CV fit (mg/L, n=%d): R2 = %.3f, r = %.3f, RMSE = %.2f, MAE = %.2f",
-    site_name, length(m), r2, r, rmse, mae
-  ))
-  invisible(list(r2 = r2, r = r, rmse = rmse, mae = mae, n = length(m)))
-}
-
 ssm01_cv_natural <- data.frame(
-  Date      = cv_measured(grabcal.dfSSM01$Date, CmodSSM01),
-  measured  = cv_measured(grabcal.dfSSM01$DOCSSM01, CmodSSM01),
+  measured  = grabcal.dfSSM01$DOCSSM01,
   predicted = exp(as.numeric(CmodSSM01$validation$pred[, 1, "2 comps"]))
 )
-# Which specific grab dates are behind the worst LOO-CV predictions --
-# check these against NPOC_high_rpd/bad_spec before dropping anything;
-# don't drop a point just because the model predicted it badly (that's
-# circular -- it removes whatever the model finds hardest, not
-# necessarily a genuinely bad sample).
-print(ssm01_cv_natural[order(-abs(ssm01_cv_natural$predicted - ssm01_cv_natural$measured)), ])
-report_fit_stats(ssm01_cv_natural, "SSM01")
 save_plot("SSM01_comps_natural.png", ggplot(ssm01_cv_natural, aes(x = measured, y = predicted)) +
   geom_point() +
-  geom_text(aes(label = Date), vjust = -0.6, size = 2.6, color = "grey30") +  # grab-sample date next to each point, per Ariel-deck request
   geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
-  labs(title = "DOCSSM01, 1 comps, LOO-CV (log-fit, back-transformed to mg/L)",
+  labs(title = "DOCSSM01, 2 comps, LOO-CV (log-fit, back-transformed to mg/L)",
        x = "measured (mg/L)", y = "predicted (mg/L)") +
   theme_minimal())
 
@@ -761,7 +578,7 @@ save_plot("SSM01_comps_natural.png", ggplot(ssm01_cv_natural, aes(x = measured, 
 # Predict model! Model was fit on log(DOC), so back-transform with exp()
 # to get predictions back in mg/L -- everything downstream (plot, CSV)
 # expects mg/L, same as before the log-transform.
-predictedCSSM01_log = predict(CmodSSM01, ncomp = 1, newdata = spectralcal.dfSSM01) # use reduced error model
+predictedCSSM01_log = predict(CmodSSM01, ncomp = 3, newdata = spectralcal.dfSSM01) # use reduced error model
 predictedCSSM01 = exp(predictedCSSM01_log)
 str(predictedCSSM01)
 plot(predictedCSSM01)
@@ -783,7 +600,7 @@ CTestSSM20 = spectralcal.dfSSM20
 # PLSR Model with "training" data, use # of grab samples - 1
 # LOO = Leave One Out cross-comparison
 # NOTE: fit on log(DOC) -- DOCSSM20_log -- see the log-transform block above.
-CmodSSM20 = plsr(DOCSSM20_log ~ SpectraSSM20, ncomp = 13, data = CTrainSSM20, validation = "LOO") # usually ncomp is N-1 grab samples you have
+CmodSSM20 = plsr(DOCSSM20_log ~ SpectraSSM20, ncomp = 5, data = CTrainSSM20, validation = "LOO") # usually ncomp is N-1 grab samples you have
 summary(CmodSSM20) # optimized for 4 components
 
 # Plot RMSE of the predictions to optimize model (log(mg/L) scale)
@@ -793,24 +610,20 @@ save_plot("SSM20_rmse.png", plot(RMSEP(CmodSSM20), legendpos = "topright"))
 # Plot predicted vs. measured from optimized model (log(mg/L) scale)
 # Pick the number of components with the least error (in this case, x)
 # NOTE: This plot may be messy, given low number of grab samples 
-plot(CmodSSM20, ncomp = 2, asp = 1, line = TRUE,
-     main = "DOCSSM20, 2 comps, validation (log scale)")
+plot(CmodSSM20, ncomp = 1, asp = 1, line = TRUE,
+     main = "DOCSSM20, 3 comps, validation (log scale)")
 save_plot("SSM20_comps.png", plot(CmodSSM20, ncomp = 1, asp = 1, line = TRUE,
-     main = "DOCSSM20, 2 comps, validation (log scale)"))
+     main = "DOCSSM20, 3 comps, validation (log scale)"))
 
 # Back-transformed (mg/L) version of the same LOO-CV comparison
 ssm20_cv_natural <- data.frame(
-  Date      = cv_measured(grabcal.dfSSM20$Date, CmodSSM20),
-  measured  = cv_measured(grabcal.dfSSM20$DOCSSM20, CmodSSM20),
-  predicted = exp(as.numeric(CmodSSM20$validation$pred[, 1, "2 comps"]))
+  measured  = grabcal.dfSSM20$DOCSSM20,
+  predicted = exp(as.numeric(CmodSSM20$validation$pred[, 1, "3 comps"]))
 )
-print(ssm20_cv_natural[order(-abs(ssm20_cv_natural$predicted - ssm20_cv_natural$measured)), ])
-report_fit_stats(ssm20_cv_natural, "SSM20")
 save_plot("SSM20_comps_natural.png", ggplot(ssm20_cv_natural, aes(x = measured, y = predicted)) +
   geom_point() +
-  geom_text(aes(label = Date), vjust = -0.6, size = 2.6, color = "grey30") +  # grab-sample date next to each point, per Ariel-deck request
   geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
-  labs(title = "DOCSSM20, 2 comps, LOO-CV (log-fit, back-transformed to mg/L)",
+  labs(title = "DOCSSM20, 3 comps, LOO-CV (log-fit, back-transformed to mg/L)",
        x = "measured (mg/L)", y = "predicted (mg/L)") +
   theme_minimal())
 
@@ -818,7 +631,7 @@ save_plot("SSM20_comps_natural.png", ggplot(ssm20_cv_natural, aes(x = measured, 
 #### STEP 8: Make predictions based on reduced-error PLSR model #### 
 ####################################################################
 # Predict model! Back-transform with exp() -- model was fit on log(DOC).
-predictedCSSM20_log = predict(CmodSSM20, ncomp = 1, newdata = spectralcal.dfSSM20) # use reduced error model
+predictedCSSM20_log = predict(CmodSSM20, ncomp = 2, newdata = spectralcal.dfSSM20) # use reduced error model
 predictedCSSM20 = exp(predictedCSSM20_log)
 str(predictedCSSM20)
 # Plot final predictions
@@ -838,7 +651,7 @@ CTestSST13 = spectralcal.dfSST13
 # PLSR Model with "training" data, use # of grab samples - 1
 # LOO = Leave One Out cross-comparison
 # NOTE: fit on log(DOC) -- DOCSST13_log -- see the log-transform block above.
-CmodSST13 = plsr(DOCSST13_log ~ SpectraSST13, ncomp = 10, data = CTrainSST13, validation = "LOO") # usually ncomp is N-1 grab samples you have
+CmodSST13 = plsr(DOCSST13_log ~ SpectraSST13, ncomp = 5, data = CTrainSST13, validation = "LOO") # usually ncomp is N-1 grab samples you have
 summary(CmodSST13) # optimized for 4 components
 
 # Plot RMSE of the predictions to optimize model (log(mg/L) scale)
@@ -848,24 +661,20 @@ save_plot("SST13_rmse.png", plot(RMSEP(CmodSST13), legendpos = "topright"))
 # Plot predicted vs. measured from optimized model (log(mg/L) scale)
 # Pick the number of components with the least error
 # NOTE: This plot may be messy, given low number of grab samples 
-plot(CmodSST13, ncomp = 9, asp = 1, line = TRUE,
-     main = "DOCSST13, 9 comps, validation (log scale)")
-save_plot("SST13_comps.png", plot(CmodSST13, ncomp = 9, asp = 1, line = TRUE,
-     main = "DOCSST13, 9 comps, validation (log scale)"))
+plot(CmodSST13, ncomp = 1, asp = 1, line = TRUE,
+     main = "DOCSST13, 5 comps, validation (log scale)")
+save_plot("SST13_comps.png", plot(CmodSST13, ncomp = 1, asp = 1, line = TRUE,
+     main = "DOCSST13, 5 comps, validation (log scale)"))
 
 # Back-transformed (mg/L) version of the same LOO-CV comparison
 sst13_cv_natural <- data.frame(
-  Date      = cv_measured(grabcal.dfSST13$Date, CmodSST13),
-  measured  = cv_measured(grabcal.dfSST13$DOCSST13, CmodSST13),
-  predicted = exp(as.numeric(CmodSST13$validation$pred[, 1, "9 comps"]))
+  measured  = grabcal.dfSST13$DOCSST13,
+  predicted = exp(as.numeric(CmodSST13$validation$pred[, 1, "5 comps"]))
 )
-print(sst13_cv_natural[order(-abs(sst13_cv_natural$predicted - sst13_cv_natural$measured)), ])
-report_fit_stats(sst13_cv_natural, "SST13")
 save_plot("SST13_comps_natural.png", ggplot(sst13_cv_natural, aes(x = measured, y = predicted)) +
   geom_point() +
-  geom_text(aes(label = Date), vjust = -0.6, size = 2.6, color = "grey30") +  # grab-sample date next to each point, per Ariel-deck request
   geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
-  labs(title = "DOCSST13, 9 comps, LOO-CV (log-fit, back-transformed to mg/L)",
+  labs(title = "DOCSST13, 5 comps, LOO-CV (log-fit, back-transformed to mg/L)",
        x = "measured (mg/L)", y = "predicted (mg/L)") +
   theme_minimal())
 
@@ -873,28 +682,14 @@ save_plot("SST13_comps_natural.png", ggplot(sst13_cv_natural, aes(x = measured, 
 #### STEP 8: Make predictions based on reduced-error PLSR model #### 
 ####################################################################
 # Predict model! Back-transform with exp() -- model was fit on log(DOC).
-predictedCSST13_log = predict(CmodSST13, ncomp = 9, newdata = spectralcal.dfSST13) # use reduced error model
+predictedCSST13_log = predict(CmodSST13, ncomp = 3, newdata = spectralcal.dfSST13) # use reduced error model
 predictedCSST13 = exp(predictedCSST13_log)
 str(predictedCSST13)
-# Plot -- for display only, exclude physically-implausible predictions
-# (order of 1e100+ mg/L) caused by the log-space PLSR model extrapolating
-# on a scan spectrum well outside the training range: exp() of a large
-# log-scale error blows up to an absurd value and squashes the rest of
-# the plot flat. 1000 mg/L is a generous ceiling -- no South Sandy DOC
-# reading has ever approached it, so this only catches that blow-up, not
-# a real high-DOC event. PredictedC_SST13.csv below still gets the
-# FULL, unfiltered prediction record -- nothing is dropped from the
-# actual output, only from this one figure.
-n_implausible <- sum(predictedCSST13 > 1000, na.rm = TRUE)
-if (n_implausible > 0) {
-  message(sprintf("SST13: excluding %d implausible predicted value(s) (>1000 mg/L, extrapolation artifact) from the plot only -- PredictedC_SST13.csv still has the full record.", n_implausible))
-}
-predictedCSST13_plot <- predictedCSST13
-predictedCSST13_plot[predictedCSST13_plot > 1000] <- NA
-plot(predictedCSST13_plot)
-save_plot("SST13_pred.png", plot(predictedCSST13_plot))
+# Plot
+plot(predictedCSST13)
+save_plot("SST13_pred.png", plot(predictedCSST13))
 
-write.csv(predictedCSST13, file = "predicted/PredictedC_SST13.csv") # <- this is your newly calibrated dataset! (full record, unfiltered)
+write.csv(predictedCSST13, file = "predicted/PredictedC_SST13.csv") # <- this is your newly calibrated dataset!
 
 # 1. Loadings Plot for SSM01 (Opposite Trend)
 # This shows how the wavelengths contribute to each component (ncomp = 1, 2, 3, etc.)
@@ -914,49 +709,18 @@ save_plot("SST13_loadings.png", plot(CmodSST13, plottype = "loading",
      main = "SST13 NO3-N PLSR Loadings"))
 
 # Convert predictedCSST13 to a data frame
-pred_df13 <- data.frame(
+pred_df <- data.frame(
   DateTime = as.POSIXct(dimnames(predictedCSST13)[[1]]),
   Predicted = as.numeric(predictedCSST13))
-pred_df01 <- data.frame(
-  DateTime = as.POSIXct(dimnames(predictedCSSM01)[[1]]),
-  Predicted = as.numeric(predictedCSSM01))
-pred_df20 <- data.frame(
-  DateTime = as.POSIXct(dimnames(predictedCSSM20)[[1]]),
-  Predicted = as.numeric(predictedCSSM20))
-# Plot -- same implausible-value exclusion as SST13_pred.png above, for
-# the same reason (this is a different view of the identical prediction
-# vector). Only affects this figure; pred_df itself keeps every row.
-pred_df_plot01 <- pred_df01
-pred_df_plot01$Predicted[pred_df_plot01$Predicted > 1000] <- NA
-save_plot("SSM01_predicted_timeseries.png", ggplot(pred_df_plot01, aes(x = DateTime, y = Predicted)) +
+# Plot
+save_plot("SST13_predicted_timeseries.png", ggplot(pred_df, aes(x = DateTime, y = Predicted)) +
   geom_point(color = "steelblue") +
   labs(
     x = "DateTime",
     y = "Predicted DOC (mg/L)",
-    title = "Predicted DOC over Time (SSM01)"
+    title = "Predicted DOC over Time (SST13)"
   ) +
   theme_minimal())
-pred_df_plot13 <- pred_df13
-pred_df_plot13$Predicted[pred_df_plot13$Predicted > 1000] <- NA
-save_plot("SST13_predicted_timeseries.png", ggplot(pred_df_plot13, aes(x = DateTime, y = Predicted)) +
-            geom_point(color = "steelblue") +
-            labs(
-              x = "DateTime",
-              y = "Predicted DOC (mg/L)",
-              title = "Predicted DOC over Time (SST13)"
-            ) +
-            theme_minimal())
-
-pred_df_plot20 <- pred_df20
-pred_df_plot20$Predicted[pred_df_plot20$Predicted > 1000] <- NA
-save_plot("SSM20_predicted_timeseries.png", ggplot(pred_df_plot20, aes(x = DateTime, y = Predicted)) +
-            geom_point(color = "steelblue") +
-            labs(
-              x = "DateTime",
-              y = "Predicted DOC (mg/L)",
-              title = "Predicted DOC over Time (SSM20)"
-            ) +
-            theme_minimal())
 
 #######################
 #### Save in Drive #### 

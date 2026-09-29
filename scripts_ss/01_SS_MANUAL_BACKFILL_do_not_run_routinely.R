@@ -1,6 +1,17 @@
 ##==============================================================================
 ## Project: QuEST
 ## Script to merge scan files in one (using timestamp)
+##
+## THIS IS NOT THE NORMAL PIPELINE STEP. It reads a manually-assembled,
+## whole-site-history Excel (SSM01_merged.xlsx, etc, 2 sheets) from a
+## separate "manual merge" Drive folder, and does the sheet-reading +
+## tidying + params/abs join all in one script, bypassing
+## 00_SS_merge_timestamps.R entirely.
+##
+## For the regular pipeline (raw per-deployment files -> 00_SS_merge_timestamps.R
+## -> 01_SS_merge_params_and_abs.R), use those two scripts instead. Only run
+## this one if you specifically need to (re)process the manual-merge source
+## data -- e.g. historical backfill or recovering from missing raw files.
 ##==============================================================================
 
 library(readxl) #to read excel 

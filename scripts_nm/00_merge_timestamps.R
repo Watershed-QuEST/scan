@@ -18,11 +18,11 @@ file.remove(files)
 #### Import scan data ####
 ##########################
 #### list and download all files in the folder ####
-# this is the in use" folder
-scan <- googledrive::as_id("https://drive.google.com/drive/folders/1np2B4bSWaNMIYE2FHL3YOnZ20FRudsEy")
+# this is the "raw" folder
+scan <- googledrive::as_id("https://drive.google.com/drive/folders/1G6v6i0tLIUthghWr0XL_wi_MqGcqPLgZ")
 # list all CSV files in the folder
 scan_csvs <- googledrive::drive_ls(path = scan)
-3
+2
 
 # create empty list to store data frames
 scan_list <- list()
@@ -191,8 +191,14 @@ names(scan_list_by_site) <- site_names
 # TEMPORARY REMOVE 20 AND 21
 #scan_list_by_site <- scan_list_by_site[-c(2,3)]
 
+# makes every non DateTime column to numeric
+scan_list_by_site <- lapply(scan_list_by_site, function(site_data_list) {
+  lapply(site_data_list, function(df) {
+    df %>% mutate(across(-DateTime, ~ suppressWarnings(as.numeric(.))))
+  })
+})
 # combine data for each site
-combined_by_site <- lapply(scan_list_by_site, function(site_data_list) {
+combined_by_site_compfing <- lapply(scan_list_by_site, function(site_data_list) {
   # bind rows of all data frames for the site
   bind_rows(site_data_list) %>%
     arrange(DateTime) %>%  # ensure chronological order if 'DateTime' exists
@@ -203,18 +209,18 @@ combined_by_site <- lapply(scan_list_by_site, function(site_data_list) {
 #### Save combined files  ####
 ##############################
 # ensure DateTime column is properly formatted
-combined_by_site <- lapply(combined_by_site, function(df) {
+combined_by_site_compfing <- lapply(combined_by_site_compfing, function(df) {
   df$DateTime <- format(df$DateTime, "%Y-%m-%d %H:%M:%S") # ensure consistent format
   return(df)
 })
 
-lapply(names(combined_by_site), function(site) {
-  write.csv(combined_by_site[[site]], file.path("data", paste0(site, "_abs.csv")))
+lapply(names(combined_by_site_compfing), function(site) {
+  write.csv(combined_by_site_compfing[[site]], file.path("data", paste0(site, "_abs.csv")))
 })
 
-lapply(names(combined_by_site), function(site) {
+lapply(names(combined_by_site_compfing), function(site) {
   file <- paste0("data/", site, "_abs.csv")
-  # this is the "in use" folder
+  # this is the "merged timestamps" folder
   drive_folder_id <- "1-dUxVn1hBWy2MpHeIjVt-2QSujpVhijy"
   # upload file to the specified Google Drive folder
   drive_put(

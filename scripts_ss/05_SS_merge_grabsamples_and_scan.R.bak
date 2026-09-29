@@ -1,0 +1,351 @@
+##==============================================================================
+## Project: QuEST
+## Here we will prep grab sample data by matching the grab samples with the time stamp of the s::can for South Sandy
+## press Command+Option+O to collapse all sections and get an overview of the workflow!
+##==============================================================================
+
+library(googledrive) 
+library(googlesheets4)
+library(dplyr)
+library(readxl)
+library(tidyverse)
+library(lubridate) 
+
+########################################
+#### Clear folders that we will use ####
+########################################
+# List and delete all files in the folder
+files <- list.files(path = "googledrive", full.names = TRUE)
+file.remove(files)
+
+##########################
+#### Import chem data ####
+##########################
+#### Load chem data ####
+# Chem data is for all the sites
+chem <- googledrive::as_id("https://drive.google.com/drive/folders/1yNoGf43hkNDC5TX7wMWc27PYvcRD0vul")
+
+# List all CSV files in the folder
+chem_csv <- googledrive::drive_ls(path = chem, type = "csv")
+2
+
+# call the specific file you want (most recent one)
+googledrive::drive_download(file = chem_csv$id[chem_csv$name=="chem_avg_flagged.csv"], 
+                            path = "googledrive/chem_avg_flagged.csv",
+                            overwrite = T)
+# load it into R
+wqual = read.csv("googledrive/chem_avg_flagged.csv")
+
+# Format date columns
+wqual$Date <- as.Date(wqual$Date, format = "%Y-%m-%d")
+
+# Filter to get just SS data
+SS <- filter(wqual, Sub_Project == "Alabama")
+
+#### Load sample info to get grab sample collection time ####
+samplelogsheet <- drive_get("https://docs.google.com/spreadsheets/d/1JVDwzSoHetQGHhYPoeoTOHzlmRrcWNPs-i5b8t2U754/edit?gid=2118868541#gid=2118868541")
+
+# Download spreadsheet from Webster Lab Sample Log Sheet
+drive_download(as_id(samplelogsheet$id), path = "googledrive/samplelogsheet.xlsx", overwrite = T)
+
+# Fetch the file
+samplelogsheet <- readxl::read_excel("googledrive/samplelogsheet.xlsx", sheet = "YSI", skip = 1)
+
+# Format date and time columns
+samplelogsheet$Date <- as.Date(samplelogsheet$`Collection Date`, format = "%Y-%m-%d")
+# Format Arrival time since itis me tmost complete Time record
+samplelogsheet$`Arrival Time` <- as.POSIXct(
+  as.numeric(samplelogsheet$`Arrival Time`) * 86400,
+  origin = "1970-01-01",
+  tz = "UTC"
+) 
+# then pull just the time-of-day if you don't want a date attached:
+samplelogsheet$Time <- format(samplelogsheet$`Arrival Time`, "%H:%M:%S")
+
+# Clean up a bit
+drops <- c("Sampling Time", "Crew Initials", "Pressure (mmHg)", "Dissolved O2 (%sat)", "pH", "Dissolved O2 (mg/L)",
+           "Scanned?", "Picture?", "Weather", "Arrival Time")
+samplelogsheet <- samplelogsheet[ , !(names(samplelogsheet) %in% drops)]
+
+# #### Change sample time to fit scan time ####
+# ###USF12###
+# samplelogsheet$Time[samplelogsheet$Site == "USF12" &
+#                       samplelogsheet$Date == "2024-05-23" &
+#                       samplelogsheet$Time == "09:30:00"] <- "09:45:00"
+
+##################################
+#### Rounding collection time ####
+##################################
+# Combine Date and Time columns into a new DateTime column
+samplelogsheet$DateTime <- paste(samplelogsheet$Date, samplelogsheet$Time, sep = " ")
+# Convert the DateTime column to POSIXct
+samplelogsheet$DateTime <- as.POSIXct(samplelogsheet$DateTime, format = "%Y-%m-%d %H:%M:%S")
+
+# Round DateTime to the nearest 15-minute interval 
+samplelogsheet$DateTime <- round_date(samplelogsheet$DateTime, unit="15 mins")
+
+# Check if it worked!
+str(samplelogsheet)
+
+#######################################################################
+#### Merge chem and sample log sheet to get sample collection time ####
+#######################################################################
+# filter only data for SSM20, SST13 and SSM01 (scan sites) 
+wqual_scans <- SS %>% filter(Site %in% c("SSM01", "SSM20", "SST13"))
+
+# Some sample log entries are EXACT duplicates -- e.g. 2025-07-28 has the
+# identical log row twice for both SSM01 and SST13 (same site/date/time,
+# just pasted in twice). Merging on Date+Site below would otherwise
+# multiply the matching chem row once per duplicate log entry, producing
+# duplicate output rows. Drop exact duplicates from the log sheet itself,
+# before merging, instead of trying to clean it up after the fact.
+n_before <- nrow(samplelogsheet)
+samplelogsheet <- samplelogsheet %>% distinct()
+if (nrow(samplelogsheet) < n_before) {
+  message(sprintf("Removed %d exact duplicate row(s) from samplelogsheet.", n_before - nrow(samplelogsheet)))
+}
+
+# merge wqual data first
+sample_times <- merge(wqual_scans, samplelogsheet, by = c("Date", "Site"))
+
+# With samplelogsheet deduplicated above, this should normally be 0. If
+# it's not, there's more than one DISTINCT sample-log entry for some
+# Date+Site (e.g. two genuinely different samples collected the same day)
+# -- that needs a closer look, not a silent hardcoded row deletion.
+n_dup <- sum(duplicated(sample_times))
+if (n_dup > 0) {
+  message(sprintf(
+    "%d duplicate row(s) remain in sample_times after merging -- check samplelogsheet for multiple distinct entries on the same Date+Site.",
+    n_dup
+  ))
+}
+##########################
+#### Import scan data ####
+##########################
+#### Import abs and parameter data ####
+# This is the "params and abs" folder
+scan <- googledrive::as_id("https://drive.google.com/drive/folders/1BNCKA7LdysjDH5_REI4WhH_P0Z4FIe0r")
+
+# List all the files in the folder
+merged <- googledrive::drive_ls(path = scan, type = "csv")
+
+#SSM01
+googledrive::drive_download(file = merged$id[merged$name=="SSM01_absparams_clean.csv"], 
+                            path = "googledrive/SSM01_absparams_clean.csv",
+                            overwrite = T)
+#SSM20
+googledrive::drive_download(file = merged$id[merged$name=="SSM20_absparams_clean.csv"], 
+                            path = "googledrive/SSM20_absparams_clean.csv",
+                            overwrite = T)
+#SST13
+googledrive::drive_download(file = merged$id[merged$name=="SST13_absparams_clean.csv"], 
+                            path = "googledrive/SST13_absparams_clean.csv",
+                            overwrite = T)
+
+# Load them separately 
+SSM01 <- read.csv("googledrive/SSM01_absparams_clean.csv")
+SSM20 <- read.csv("googledrive/SSM20_absparams_clean.csv")
+SST13 <- read.csv("googledrive/SST13_absparams_clean.csv")
+
+# Convert the DateTime column to POSIXct
+SSM01$DateTime <- as.POSIXct(SSM01$DateTime, format = "%Y-%m-%d %H:%M:%S")
+SSM20$DateTime <- as.POSIXct(SSM20$DateTime, format = "%Y-%m-%d %H:%M:%S")
+SST13$DateTime <- as.POSIXct(SST13$DateTime, format = "%Y-%m-%d %H:%M:%S")
+
+# --- Drop rows with no usable DateTime before merging ---
+# *_absparams_clean.csv has (upstream) rows with a missing or garbled
+# DateTime (in some cases a Status value like "Replaced_Good" ended up in
+# the DateTime field instead of a timestamp). Those all become NA here.
+# base R's merge() treats NA as a matching join key -- so if SSM01 has,
+# say, 500 rows with DateTime == NA and U01 has even one row with
+# DateTime == NA, merge(..., by = "DateTime") cross-multiplies them into
+# ~500 bogus output rows. That is almost certainly the source of the
+# duplicate/inflated grab-sample row counts. Drop unmatched-DateTime rows
+# from the scan data before merging so NA can't be used as a join key.
+drop_na_datetime <- function(df, label) {
+  bad <- is.na(df$DateTime)
+  if (any(bad)) {
+    message(sprintf("%s: dropping %d row(s) with missing/unparseable DateTime before merge.", label, sum(bad)))
+  }
+  df[!bad, , drop = FALSE]
+}
+SSM01 <- drop_na_datetime(SSM01, "SSM01")
+SSM20 <- drop_na_datetime(SSM20, "SSM20")
+SST13 <- drop_na_datetime(SST13, "SST13")
+
+# Check for duplicates
+sum(duplicated(SSM01))
+sum(duplicated(SSM20))
+sum(duplicated(SST13))
+
+##################################
+#### Merge chem and scan data ####
+##################################
+# Filter to get just one site at a time
+# Also drop any grab-sample row with a missing DateTime here for the same
+# reason as above -- merge() would otherwise match it against every
+# NA-DateTime row left on the scan side (and vice versa).
+U01 <- filter(sample_times, Site == "SSM01", !is.na(DateTime))
+U20 <- filter(sample_times, Site == "SSM20", !is.na(DateTime))
+U13 <- filter(sample_times, Site == "SST13", !is.na(DateTime))
+
+# First check if the merge works
+dat01 <- merge(SSM01, U01, by = "DateTime")
+dat20 <- merge(SSM20, U20, by = "DateTime")
+dat13 <- merge(SST13, U13, by = "DateTime")
+
+# scan data first - perform a left join
+data01 <- merge(SSM01, U01, by = "DateTime", all.x = TRUE)
+data20 <- merge(SSM20, U20, by = "DateTime", all.x = TRUE)
+data13 <- merge(SST13, U13, by = "DateTime", all.x = TRUE)
+
+# Check for duplicates in the original datasets
+sum(duplicated(data01))
+sum(duplicated(data20))
+sum(duplicated(data13))
+
+########################################
+#### Clear corrupted spectral times ####
+########################################
+# List of your final dataframes
+dfs <- c("data01", "data20", "data13")
+
+for (df_name in dfs) {
+  if (exists(df_name)) {
+    df <- get(df_name)
+    
+    # Identify columns starting with X and a digit
+    # This avoids accidentally renaming columns like "X" (if it's an ID)
+    colnames(df) <- gsub("^X([0-9])", "\\1", colnames(df))
+    
+    # Force the spectral data to be numeric 
+    # (In case the merge turned them back into characters)
+    spec_cols <- grep("^[0-9]", colnames(df))
+    df <- df %>%
+      mutate(across(all_of(spec_cols), ~as.numeric(as.character(.))))
+    
+    assign(df_name, df)
+  }
+}
+
+# 1. Define a list of your merged datasets
+merged_list <- list(data01 = data01, data20 = data20, data13 = data13)
+
+# 2. Process each to handle corrupted data
+cleaned_data_list <- lapply(merged_list, function(df) {
+  
+  # Identify spectral columns
+  spec_cols <- grep("^[0-9]", colnames(df), value = TRUE)
+  
+  df_clean <- df %>%
+    # Masking with NA
+    # If Status is 'Corrupted_No_Match', we turn the spectral data into NA
+    mutate(across(all_of(spec_cols), 
+                  ~ifelse(Status == "Corrupted_No_Match", NA, .))) %>%
+    
+    # Add a flag for your calibration step
+    # This makes it easy to filter only good paired samples later
+    mutate(ReadyForCalibration = ifelse(!is.na(Site) & Status != "Corrupted_No_Match", 
+                                        TRUE, FALSE))
+  
+  return(df_clean)
+})
+
+# 3. Bring them back to the environment
+data01_final <- cleaned_data_list$data01
+data20_final <- cleaned_data_list$data20
+data13_final <- cleaned_data_list$data13
+
+# 4. QUICK CHECK: How many calibration points did we lose?
+# (Where we had a grab sample but the scan was corrupted)
+sum(data13_final$Status == "Corrupted_No_Match" & !is.na(data13_final$Site))
+sum(data20_final$Status == "Corrupted_No_Match" & !is.na(data20_final$Site))
+sum(data01_final$Status == "Corrupted_No_Match" & !is.na(data01_final$Site))
+
+#################################################
+#### Clean up spectra, very low or high rows ####
+#################################################
+# Same class of bug as 02_SS_clean.R and NM's equivalent script: this used
+# to select spectral columns by hardcoded position (c(18:126) / c(18:129)).
+# Tracing those positions through the actual merged data (spectra + grab
+# chem columns appended after) showed two real problems: the range started
+# one column too late, so the first wavelength (200.00.nm) was never
+# checked, and it ran ~9-12 columns too far, so it was applying the numeric
+# "< -3 | > 60" check to the Status column, the datetime column, and several
+# appended chem columns (Site name, NPOC, etc.) that aren't spectral at all.
+# Select spectral columns by name instead -- matches with or without a
+# leading "X" since this step runs after the earlier "Clear corrupted
+# spectral times" section already strips it.
+is_wl_col <- function(nm) grepl("^X?[0-9]+\\.[0-9]+\\.nm$", nm)
+
+filter_extreme_spectra <- function(df, lo = -3, hi = 60) {
+  spec_cols <- names(df)[is_wl_col(names(df))]
+  dplyr::filter(df, !if_any(dplyr::all_of(spec_cols), ~ . < lo | . > hi))
+}
+
+data01_clean <- filter_extreme_spectra(data01_final, lo = -3, hi = 60)
+data20_clean <- filter_extreme_spectra(data20_final, lo = -3, hi = 60)
+data13_clean <- filter_extreme_spectra(data13_final, lo = -3, hi = 60)
+
+# Flag bad spectra. This used to check only a hardcoded, arbitrary slice
+# (columns 25:39, ~220-255nm) with a comment saying to "adapt column indices
+# to your data" -- there's no evidence that was ever tuned per site, and a
+# narrow fixed slice doesn't make sense once sites can have different
+# non-spectral column counts ahead of the spectral range. Check the FULL
+# retained spectrum (200-450nm) instead, consistent with the filter above.
+flag_bad_spectra <- function(df, lo = -20, hi = 70) {
+  spec_cols <- names(df)[is_wl_col(names(df))]
+  # pmin()/pmax() across columns are vectorized (C-level) -- much faster
+  # than apply(spec, 1, min/max) row-by-row over a ~100-column, many-row
+  # spectrum, which is what was making this step slow.
+  spec <- as.list(df[, spec_cols])
+  df$spec_min <- do.call(pmin, c(spec, list(na.rm = TRUE)))
+  df$spec_max <- do.call(pmax, c(spec, list(na.rm = TRUE)))
+  df$bad_spec <- df$spec_min < lo | df$spec_max > hi
+  df
+}
+
+plot_bad_spectra <- function(df, site_label) {
+  ggplot(df, aes(x = DateTime, y = spec_min, color = bad_spec)) +
+    geom_point(size = 0.5, alpha = 0.5) +
+    scale_color_manual(values = c("FALSE" = "grey60", "TRUE" = "red")) +
+    labs(title = paste0(site_label, ": minimum absorbance value over time"),
+         subtitle = "Red = spectra flagged as bad (min < -20)",
+         x = "Date", y = "Minimum absorbance across all bands") +
+    theme_minimal()
+}
+
+data01_clean <- flag_bad_spectra(data01_clean)
+print(plot_bad_spectra(data01_clean, "SSM01"))
+
+data13_clean <- flag_bad_spectra(data13_clean)
+print(plot_bad_spectra(data13_clean, "SST13"))
+
+data20_clean <- flag_bad_spectra(data20_clean)
+print(plot_bad_spectra(data20_clean, "SSM20"))
+
+############################
+#### Save matched files ####
+############################
+# Make sure it is in datetime format
+data01_clean$DateTime <- format(data01_clean$DateTime, "%Y-%m-%d %H:%M:%S")
+# Save the new data frame to a CSV file
+write.csv(data01_clean,"googledrive/SSM01_merged.csv" , row.names=FALSE, quote=FALSE)
+# Make sure it is in datetime format
+data20_clean$DateTime <- format(data20_clean$DateTime, "%Y-%m-%d %H:%M:%S")
+# Save the new data frame to a CSV file
+write.csv(data20_clean,"googledrive/SSM20_merged.csv" , row.names=FALSE, quote=FALSE)
+# Make sure it is in datetime format
+data13_clean$DateTime <- format(data13_clean$DateTime, "%Y-%m-%d %H:%M:%S")
+# Save the new data frame to a CSV file
+write.csv(data13_clean,"googledrive/SST13_merged.csv" , row.names=FALSE, quote=FALSE)
+
+# Define the target folder ID in Google Drive
+# This is the "with grab" folders
+drive_folder_id <- "1Wju54VbyACZ_RFtfeInSvBCiVDKFScGj"
+
+# Upload the file to the specified Google Drive folder
+drive_put(media = "googledrive/SSM01_merged.csv", path = as_id(drive_folder_id))
+drive_put(media = "googledrive/SSM20_merged.csv", path = as_id(drive_folder_id))
+drive_put(media = "googledrive/SST13_merged.csv", path = as_id(drive_folder_id))
+

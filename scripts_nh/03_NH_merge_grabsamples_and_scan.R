@@ -21,7 +21,6 @@ file.remove(files)
 ##########################
 #### Import chem data ####
 ##########################
-#### Load chem data ####
 # Chem data is for all the sites, this is the chem data folder
 chem <- googledrive::as_id("https://drive.google.com/drive/folders/1ZCVAoIamyMMtwh-Cy3SpeQx2IWYu6gg2")
 

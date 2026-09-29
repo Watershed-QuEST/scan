@@ -72,14 +72,14 @@ USF12_merged <- USF12_merged %>%
 # make sure it is in datetime format
 USF12_merged$DateTime <- format(USF12_merged$DateTime, "%Y-%m-%d %H:%M:%S")
 # save the new data frame to a CSV file
-write.csv(USF12_merged,"googledrive/USF12_absparams_Buttercup.csv" , row.names=FALSE, quote=FALSE)
+write.csv(USF12_merged,"googledrive/USF12_absparams.csv" , row.names=FALSE, quote=FALSE)
 
 # define the target folder ID in Google Drive
 # this is the "merged" folder
 drive_folder_id <- "1hlc9U54d70T5-hml_F9RM8FAiUCVRFmp"
 
 # upload the file to the specified Google Drive folder
-drive_upload(media = "googledrive/USF12_absparams_Buttercup.csv", path = as_id(drive_folder_id))
+drive_put(media = "googledrive/USF12_absparams.csv", path = as_id(drive_folder_id))
 
 ##==============================================================================
 ## USF20
@@ -139,14 +139,14 @@ USF20_merged <- USF20_merged %>%
 # make sure it is in datetime format
 USF20_merged$DateTime <- format(USF20_merged$DateTime, "%Y-%m-%d %H:%M:%S")
 # save the new data frame to a CSV file
-write.csv(USF20_merged,"googledrive/USF20_absparams_Blossom.csv" , row.names=FALSE, quote=FALSE)
+write.csv(USF20_merged,"googledrive/USF20_absparams.csv" , row.names=FALSE, quote=FALSE)
 
 # define the target folder ID in Google Drive
 # this is the "merged" folder
 drive_folder_id <- "1hlc9U54d70T5-hml_F9RM8FAiUCVRFmp"
 
 # upload the file to the specified Google Drive folder
-drive_upload(media = "googledrive/USF20_absparams_Blossom.csv", path = as_id(drive_folder_id))
+drive_put(media = "googledrive/USF20_absparams.csv", path = as_id(drive_folder_id))
 
 ##==============================================================================
 ## USF21
@@ -205,12 +205,12 @@ USF21_merged <- USF21_merged %>%
 # make sure it is in datetime format
 USF21_merged$DateTime <- format(USF21_merged$DateTime, "%Y-%m-%d %H:%M:%S")
 # save the new data frame to a CSV file
-write.csv(USF21_merged,"googledrive/USF21_absparams_Bubbles.csv" , row.names=FALSE, quote=FALSE)
+write.csv(USF21_merged,"googledrive/USF21_absparams.csv" , row.names=FALSE, quote=FALSE)
 
 # define the target folder ID in Google Drive
 # this is the "merged" folder
 drive_folder_id <- "1hlc9U54d70T5-hml_F9RM8FAiUCVRFmp"
 
 # upload the file to the specified Google Drive folder
-drive_upload(media = "googledrive/USF21_absparams_Bubbles.csv", path = as_id(drive_folder_id))
+drive_put(media = "googledrive/USF21_absparams.csv", path = as_id(drive_folder_id))
 

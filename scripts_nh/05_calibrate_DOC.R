@@ -50,27 +50,27 @@ merged <- googledrive::drive_ls(path = scan, type = "csv")
 3
 
 #CTB
-googledrive::drive_download(file = merged$id[merged$name=="CTB_merged.csv"], 
+googledrive::drive_download(file = merged$id[merged$name=="CTB_merged.csv"],
                             path = "googledrive/CTB_merged.csv",
                             overwrite = T)
 #SMB
-googledrive::drive_download(file = merged$id[merged$name=="SMB_merged.csv"], 
+googledrive::drive_download(file = merged$id[merged$name=="SMB_merged.csv"],
                             path = "googledrive/SMB_merged.csv",
                             overwrite = T)
 #NCBd
-googledrive::drive_download(file = merged$id[merged$name=="NCBd_merged.csv"], 
+googledrive::drive_download(file = merged$id[merged$name=="NCBd_merged.csv"],
                             path = "googledrive/NCBd_merged.csv",
                             overwrite = T)
 #LMP07
-googledrive::drive_download(file = merged$id[merged$name=="LMP07_merged.csv"], 
+googledrive::drive_download(file = merged$id[merged$name=="LMP07_merged.csv"],
                             path = "googledrive/LMP07_merged.csv",
                             overwrite = T)
 #LMP27
-googledrive::drive_download(file = merged$id[merged$name=="LMP27_merged.csv"], 
+googledrive::drive_download(file = merged$id[merged$name=="LMP27_merged.csv"],
                             path = "googledrive/LMP27_merged.csv",
                             overwrite = T)
 #LMP72
-googledrive::drive_download(file = merged$id[merged$name=="LMP72_merged.csv"], 
+googledrive::drive_download(file = merged$id[merged$name=="LMP72_merged.csv"],
                             path = "googledrive/LMP72_merged.csv",
                             overwrite = T)
 
@@ -656,6 +656,8 @@ CTestCTB = spectralcal.dfCTB
 CmodCTB = plsr(DOCCTB ~ SpectraCTB, ncomp = 5, data = CTrainCTB, validation = "LOO") # usually ncomp is N-1 grab samples you have
 summary(CmodCTB) # optimized for 4 components
 
+?plsr
+  
 # Plot RMSE of the predictions to optimize model
 plot(RMSEP(CmodCTB), legendpos = "topright")
 
@@ -815,7 +817,7 @@ CTest07 = spectralcal.df07
 
 # PLSR Model with "training" data, use # of grab samples - 1
 # LOO = Leave One Out cross-comparison
-Cmod07 = plsr(DOC07 ~ Spectra07, ncomp = 7, data = CTrain07, validation = "LOO") # usually ncomp is N-1 grab samples you have
+Cmod07 = plsr(DOC07 ~ Spectra07, ncomp = 5, data = CTrain07, validation = "LOO") # usually ncomp is N-1 grab samples you have
 summary(Cmod07) # optimized for 4 components
 
 # Plot RMSE of the predictions to optimize model
