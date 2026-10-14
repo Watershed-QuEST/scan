@@ -13,6 +13,21 @@ library(spectrolab)
 library(ggplot2)
 library(plotly)
 
+graphics.off()
+
+######################################
+#### Auto-save calibration figures ###
+######################################
+# so all of DV's figures land in one folder, "scan-figs".
+fig_dir <- "scan_figs"
+if (!dir.exists(fig_dir)) dir.create(fig_dir, recursive = TRUE)
+
+save_plot <- function(filename, plot_expr, width = 900, height = 600, res = 120) {
+  png(file.path(fig_dir, filename), width = width, height = height, res = res)
+  print(plot_expr)
+  dev.off()
+}
+
 ###################################
 #### Clear folders we will use ####
 ###################################
@@ -24,7 +39,7 @@ file.remove(files)
 #### STEP 1: Prep grab sample data ###
 ######################################
 # What you need to do here is match the grab samples with the time stamp of the s::can
-# This data was matched using previous scripts #
+# This data was matched using previous scripts 
 # See scripts merge_params_and_abs and merge_grabsamples_and_scan
 
 #######################################################
@@ -35,7 +50,7 @@ scan <- googledrive::as_id("https://drive.google.com/drive/folders/12N6uUxXTttdn
 
 # List all xlsx files in the folder
 merged <- googledrive::drive_ls(path = scan, type = "csv")
-3
+2
 
 #DVO
 googledrive::drive_download(file = merged$id[merged$name=="DVO_chem.csv"], 
@@ -75,6 +90,27 @@ DVMS1 <- DVMS1 %>%
   filter(!is.na(DateTime))
 DVNWT5 <- DVNWT5 %>%
   filter(!is.na(DateTime))
+
+#########################################################
+#### Plot raw s::can DOC (DOCeq) over time, per site ####
+#########################################################
+# This is the sensor's factory-calibrated DOC estimate
+# (DOCeq..mg.l....Measured.value) -- for biofouling check
+plot_raw_doc <- function(df, site_label) {
+  ggplot(df, aes(x = DateTime, y = DOCeq..mg.l....Measured.value)) +
+    geom_point(size = 0.6, alpha = 0.5, color = "darkorange") +
+    labs(
+      x = "DateTime",
+      y = "Raw DOCeq (mg/L)",
+      title = paste0(site_label, ": Raw s::can DOC over Time"),
+      subtitle = "Sensor's own DOCeq, before PLSR recalibration"
+    ) +
+    theme_minimal()
+}
+
+save_plot("DVO_rawDOC_over_time.png", plot_raw_doc(DVO, "DVO"))
+save_plot("DVMS1_rawDOC_over_time.png", plot_raw_doc(DVMS1, "DVMS1"))
+save_plot("DVNWT5_rawDOC_over_time.png", plot_raw_doc(DVNWT5, "DVNWT5"))
 
 # Rename columns by removing the X in front of the spectra (that brakes the code somehow)
 rename_columns <- function(df) {
@@ -238,14 +274,18 @@ attributes(grab.matrixDVNWT5)
 grab.spectraDVO = spectra(value = absDVO, bands = wlDVO, names = NumDVO)
 attributes(grab.spectraDVO)
 plot(grab.spectraDVO) # Note, bands here = absorbance from the scans
+# Training-dataset wavelengths (the grab-sample-matched spectra PLSR trains on).
+save_plot("DVO_train.png", plot(grab.spectraDVO))
 
 grab.spectraDVMS1 = spectra(value = absDVMS1, bands = wlDVMS1, names = NumDVMS1)
 attributes(grab.spectraDVMS1)
 plot(grab.spectraDVMS1) # Note, bands here = absorbance from the scans
+save_plot("DVMS1_train.png", plot(grab.spectraDVMS1))
 
 grab.spectraDVNWT5 = spectra(value = absDVNWT5, bands = wlDVNWT5, names = NumDVNWT5)
 attributes(grab.spectraDVNWT5)
 plot(grab.spectraDVNWT5) # Note, bands here = absorbance from the scans
+save_plot("DVNWT5_train.png", plot(grab.spectraDVNWT5))
 
 #grab.spectra = as_spectra.list(grab.spectra, wave_unit = "wavenumber", measurement_nit = "absorbance")
 grab.spectraDVO = as.matrix(grab.spectraDVO)
@@ -309,6 +349,8 @@ colnames(scan.matrixDVO) = as.numeric(wlDVO)
 scan.matrixDVO = as.matrix(scan.matrixDVO)
 specDVO = spectra(value = absDVO, bands = wlDVO, names = NumDVO)
 plot(specDVO) # Note = reflectance here = absorbance from the scans
+# Full deployment-record wavelengths (every scan, not just grab-matched ones).
+save_plot("DVO_full_spectra.png", plot(specDVO))
 
 #DVMS1
 scan.matrixDVMS1 = cbind(absDVMS1)
@@ -318,6 +360,7 @@ colnames(scan.matrixDVMS1) = as.numeric(wlDVMS1)
 scan.matrixDVMS1 = as.matrix(scan.matrixDVMS1)
 specDVMS1 = spectra(value = absDVMS1, bands = wlDVMS1, names = NumDVMS1)
 plot(specDVMS1) # Note = reflectance here = absorbance from the scans
+save_plot("DVMS1_full_spectra.png", plot(specDVMS1))
 
 #DVNWT5
 scan.matrixDVNWT5 = cbind(absDVNWT5)
@@ -327,6 +370,7 @@ colnames(scan.matrixDVNWT5) = as.numeric(wlDVNWT5)
 scan.matrixDVNWT5 = as.matrix(scan.matrixDVNWT5)
 specDVNWT5 = spectra(value = absDVNWT5, bands = wlDVNWT5, names = NumDVNWT5)
 plot(specDVNWT5) # Note = reflectance here = absorbance from the scans
+save_plot("DVNWT5_full_spectra.png", plot(specDVNWT5))
 
 # NOTE: this is where you can identify problem spectra & remove them
 
@@ -395,11 +439,13 @@ summary(CmodDVO) # optimized for 4 components
 
 # Plot RMSE of the predictions to optimize model
 plot(RMSEP(CmodDVO), legendpos = "topright")
+save_plot("DVO_RMSEP.png", plot(RMSEP(CmodDVO), legendpos = "topright"))
 
 # Plot predicted vs. measured from optimized model
 # Pick the number of components with the least error
-# NOTE: This plot may be messy, given low number of grab samples 
+# NOTE: This plot may be messy, given low number of grab samples
 plot(CmodDVO, ncomp = 3, asp = 1, line = TRUE)
+save_plot("DVO_PLSR.png", plot(CmodDVO, ncomp = 3, asp = 1, line = TRUE))
 
 ####################################################################
 #### STEP 8: Make predictions based on reduced-error PLSR model #### 
@@ -408,6 +454,7 @@ plot(CmodDVO, ncomp = 3, asp = 1, line = TRUE)
 predictedCDVO = predict(CmodDVO, ncomp = 3, newdata = spectralcal.dfDVO) # use reduced error model
 str(predictedCDVO)
 plot(predictedCDVO)
+save_plot("DVO_pred.png", plot(predictedCDVO))
 
 write.csv(predictedCDVO, file = "predicted/PredictedC_DVO.csv") # <- this is your newly calibrated dataset!
 
@@ -429,11 +476,13 @@ summary(CmodDVMS1) # optimized for 4 components
 
 # Plot RMSE of the predictions to optimize model
 plot(RMSEP(CmodDVMS1), legendpos = "topright")
+save_plot("DVMS1_RMSEP.png", plot(RMSEP(CmodDVMS1), legendpos = "topright"))
 
 # Plot predicted vs. measured from optimized model
 # Pick the number of components with the least error (in this case, x)
-# NOTE: This plot may be messy, given low number of grab samples 
+# NOTE: This plot may be messy, given low number of grab samples
 plot(CmodDVMS1, ncomp = 2, asp = 1, line = TRUE)
+save_plot("DVMS1_PLSR.png", plot(CmodDVMS1, ncomp = 2, asp = 1, line = TRUE))
 
 ####################################################################
 #### STEP 8: Make predictions based on reduced-error PLSR model #### 
@@ -443,6 +492,7 @@ predictedCDVMS1 = predict(CmodDVMS1, ncomp = 2, newdata = spectralcal.dfDVMS1) #
 str(predictedCDVMS1)
 # Plot final predictions
 plot(predictedCDVMS1)
+save_plot("DVMS1_pred.png", plot(predictedCDVMS1))
 
 write.csv(predictedCDVMS1, file = "predicted/PredictedC_DVMS1.csv") # <- this is your newly calibrated dataset!
 
@@ -461,11 +511,13 @@ summary(CmodDVNWT5) # optimized for 4 components
 
 # Plot RMSE of the predictions to optimize model
 plot(RMSEP(CmodDVNWT5), legendpos = "topright")
+save_plot("DVNWT5_RMSEP.png", plot(RMSEP(CmodDVNWT5), legendpos = "topright"))
 
 # Plot predicted vs. measured from optimized model
 # Pick the number of components with the least error
-# NOTE: This plot may be messy, given low number of grab samples 
+# NOTE: This plot may be messy, given low number of grab samples
 plot(CmodDVNWT5, ncomp = 1, asp = 1, line = TRUE)
+save_plot("DVNWT5_PLSR.png", plot(CmodDVNWT5, ncomp = 1, asp = 1, line = TRUE))
 
 ####################################################################
 #### STEP 8: Make predictions based on reduced-error PLSR model #### 
@@ -475,39 +527,51 @@ predictedCDVNWT5 = predict(CmodDVNWT5, ncomp = 1, newdata = spectralcal.dfDVNWT5
 str(predictedCDVNWT5)
 # Plot
 plot(predictedCDVNWT5)
+save_plot("DVNWT5_pred.png", plot(predictedCDVNWT5))
 
 write.csv(predictedCDVNWT5, file = "predicted/PredictedC_DVNWT5.csv") # <- this is your newly calibrated dataset!
 
-# 1. Loadings Plot for DVO (Opposite Trend)
-# This shows how the wavelengths contribute to each component (ncomp = 1, 2, 3, etc.)
-plot(CmodDVO, plottype = "loading",
-     comps = 1:2, # Plot the first two components for initial inspection
-     main = "DVO NO3-N PLSR Loadings")
-
-# 2. Loadings Plot for DVMS1 (Flat Trend)
-plot(CmodDVMS1, plottype = "loading",
-     comps = 1:2, # Plot the first two components
-     main = "DVMS1 NO3-N PLSR Loadings")
-
-# 3. Loadings Plot for DVNWT5 (Flat Trend)
-# Examine the first few components for DVNWT5
-plot(CmodDVNWT5, plottype = "loading",
-     comps = 1:2, # Plot the first two components
-     main = "DVNWT5 NO3-N PLSR Loadings")
-
 # Convert predictedCDVNWT5 to a data frame
-pred_df <- data.frame(
+pred_df_DVNWT5 <- data.frame(
   DateTime = as.POSIXct(dimnames(predictedCDVNWT5)[[1]]),
   Predicted = as.numeric(predictedCDVNWT5))
 # Plot
-ggplot(pred_df, aes(x = DateTime, y = Predicted)) +
+save_plot("DVNWT5_Cpred.png", ggplot(pred_df_DVNWT5, aes(x = DateTime, y = Predicted)) +
   geom_point(color = "steelblue") +
   labs(
     x = "DateTime",
     y = "Predicted DOC (mg/L)",
     title = "Predicted DOC over Time (DVNWT5)"
   ) +
-  theme_minimal()
+  theme_minimal())
+
+# Convert predictedCDVMS1 to a data frame
+pred_df_DVMS1 <- data.frame(
+  DateTime = as.POSIXct(dimnames(predictedCDVMS1)[[1]]),
+  Predicted = as.numeric(predictedCDVMS1))
+# Plot
+save_plot("DVMS1_Cpred.png", ggplot(pred_df_DVMS1, aes(x = DateTime, y = Predicted)) +
+  geom_point(color = "steelblue") +
+  labs(
+    x = "DateTime",
+    y = "Predicted DOC (mg/L)",
+    title = "Predicted DOC over Time (DVMS1)"
+  ) +
+  theme_minimal())
+
+# Convert predictedCDVO to a data frame
+pred_df_DVO <- data.frame(
+  DateTime = as.POSIXct(dimnames(predictedCDVO)[[1]]),
+  Predicted = as.numeric(predictedCDVO))
+# Plot
+save_plot("DVO_Cpred.png", ggplot(pred_df_DVO, aes(x = DateTime, y = Predicted)) +
+  geom_point(color = "steelblue") +
+  labs(
+    x = "DateTime",
+    y = "Predicted DOC (mg/L)",
+    title = "Predicted DOC over Time (DVO)"
+  ) +
+  theme_minimal())
 
 #######################
 #### Save in Drive #### 

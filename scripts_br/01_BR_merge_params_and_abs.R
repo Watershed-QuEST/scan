@@ -22,11 +22,11 @@ scan <- googledrive::as_id("https://drive.google.com/drive/folders/1ROxMHt-mzsMr
 scan_csvs <- googledrive::drive_ls(path = scan, type = "csv")
 
 #BRMQ1 parameters
-googledrive::drive_download(file = scan_csvs$id[scan_csvs$name=="BRMQ1_params.csv"], 
+googledrive::drive_download(file = scan_csvs$id[scan_csvs$name=="BRMQ1_params.csv"],
                             path = "googledrive/BRMQ1_params.csv",
                             overwrite = T)
 #BRMQ1 abs
-googledrive::drive_download(file = scan_csvs$id[scan_csvs$name=="BRMQ1_abs.csv"], 
+googledrive::drive_download(file = scan_csvs$id[scan_csvs$name=="BRMQ1_abs.csv"],
                             path = "googledrive/BRMQ1_abs.csv",
                             overwrite = T)
 
@@ -41,8 +41,8 @@ colSums(BRMQ1_params == 0, na.rm = TRUE)
 #### Tidy both data sets ####
 #############################
 # remove extra rows
-BRMQ1_params <- BRMQ1_params[-c(1:9), ] 
-#BRMQ1_abs <- BRMQ1_abs[-c(1:9), ] 
+BRMQ1_params <- BRMQ1_params[-c(1:9), ]
+#BRMQ1_abs <- BRMQ1_abs[-c(1:9), ]
 
 # change datetime format
 BRMQ1_params <- BRMQ1_params %>%

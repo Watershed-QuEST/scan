@@ -22,7 +22,7 @@ file.remove(files)
 scan <- googledrive::as_id("https://drive.google.com/drive/folders/18aCQUU838dYH2DzYJ_gRXVm0YNkpsnK1")
 # list all CSV files in the folder
 scan_csvs <- googledrive::drive_ls(path = scan)
-3
+2
 
 # create empty list to store data frames
 scan_list <- list()
@@ -85,9 +85,6 @@ scan_list_by_site <- lapply(site_names, function(site) {
 
 # name the list by site
 names(scan_list_by_site) <- site_names
-
-# TEMPORARY REMOVE 20 AND 21
-# scan_list_by_site <- scan_list_by_site[-c(2,3)]
 
 # combine data for each site
 combined_by_site <- lapply(scan_list_by_site, function(site_data_list) {
