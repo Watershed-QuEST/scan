@@ -1,6 +1,6 @@
 ##==============================================================================
 ## Project: QuEST
-## Here we will prep grab sample data by matching the grab samples with the time stamp of the s::can for Dog Valley
+## Here we will prep grab sample data and match the grab samples with the s::can for Dog Valley
 ##==============================================================================
 
 library(googledrive)
@@ -35,9 +35,8 @@ chem_csv <- googledrive::drive_ls(path = chem, type = "csv")
 # the RAW (not pre-averaged), per-analyte flagged export -- 
 # multiple rows per Date+Site (one per lab replicate R1/R2/R3,
 # further split into separate "DOC" and "Chem" lab submissions), each
-# analyte column paired with its own "<analyte>_flag" column (TRUE = that
-# specific replicate's value for that specific analyte was below the
-# method detection limit and substituted). We average replicates ourselves
+# analyte column paired with its own "<analyte>_flag" column (TRUE = analyte 
+# was below the detection limit and substituted). We average replicates
 # below, analyte-by-analyte.
 googledrive::drive_download(file = chem_csv$id[chem_csv$name=="chem_raw_flagged.csv"],
                             path = "googledrive/chem_raw_flagged.csv",
@@ -48,9 +47,9 @@ wqual_raw <- read.csv("googledrive/chem_raw_flagged.csv")
 # Format date columns
 wqual_raw$Date <- as.Date(wqual_raw$Date, format = "%Y-%m-%d")
 
-##############################################################################
-#### Collapse raw per-replicate chem rows to one row per Date + Site      ####
-##############################################################################
+#########################################################################
+#### Collapse raw per-replicate chem rows to one row per Date + Site ####
+#########################################################################
 # analytes to collapse
 analyte_cols <- c("NPOC..mg.C.L.", "NO3..mg.N.L.", "NH4..ug.N.L.", "TDN..mg.N.L.",
                    "PO4..ug.P.L.", "Cl..mg.Cl.L.", "SO4..mg.S.L.", "Na..mg.Na.L.",
@@ -108,8 +107,7 @@ message(sprintf(
   nrow(DV), sum(DV$NPOC_flagged_any, na.rm = TRUE), sum(DV$NPOC_high_rpd, na.rm = TRUE)
 ))
 
-# Kept as "data_avg" so the rest of this script (unchanged below) still works
-# against the same variable name the old single-snapshot version produced.
+# Kept as "data_avg"
 data_avg <- DV
 
 #############################################################
@@ -153,7 +151,7 @@ times <- times %>%
          # Extract only the Time part and store it as a character string
          Time = format(Time, format = "%H:%M:%S"))
 
-#### This is if you want to change sample time to fit scan time ####
+#### If you want to change sample time to fit scan time ####
 ###DVO###
 # times$Start_Time[times$`Site ID` == "DVO" &
 #                    times$Date == "2024-05-23" &
@@ -257,12 +255,7 @@ sum(duplicated(dataMS1))
 ##################
 #### Clean up ####
 ##################
-# NOTE: switched from select(-c(...)) to select(-any_of(...)). The old
-# single-snapshot chem file came through read.csv() and left behind "X.x"/
-# "X.y" row-index columns from the merge; chem_raw_flagged.csv -> the new
-# DV tibble above doesn't have an "X" column, so those names may no longer
-# exist after the merge. select(-c(...)) errors on a missing column name;
-# any_of() just skips it if it's not there -- drops whichever of these
+# drop some conlumns we don't need
 # columns are actually present, same intent either way.
 drop_cols <- c("X.x", "X.y", "Time Arrived (if applicable)", "Time Sensor(s) Were Cleaned (removed from water)",
                "Time Sensor(s) Were Cleaned (returned to water)", "Activites Done at Site", "Stage Depth (m)",
@@ -277,20 +270,13 @@ dataMS1 <- dataMS1 %>% dplyr::select(-dplyr::any_of(drop_cols))
 ########################################
 #### Clear corrupted spectral times ####
 ########################################
-# Same idea as 05_SS_merge_grabsamples_and_scan.R's equivalent step: strip
-# any leading "X" that read.csv added to wavelength column names
+# Strip any leading "X" that read.csv added to wavelength column names
 # (e.g. "X200.00.nm" -> "200.00.nm"), and force spectral columns to numeric
 # in case the merge above turned any of them back into character.
 #
-# SS's version ALSO masks spectral values to NA where Status ==
-# "Corrupted_No_Match" and sets a ReadyForCalibration flag from that same
-# Status column. DV doesn't have that: 00_DV_merge_timestamps.R never built
-# the Good/Corrupted/Replaced Status flagging 00_SS_merge_timestamps.R has,
-# so DVO/DVNWT5/DVMS1's absparams.csv has no Status column to key off --
-# there's nothing to mask against here. If you want that duplicate-timestamp
-# QC for DV too, it would need to be added to 00_DV_merge_timestamps.R
-# first (happy to help with that separately); skipping it here rather than
-# silently doing nothing or erroring on a missing column.
+# Masks spectral values to NA where Status == "Corrupted_No_Match" and sets a
+# ReadyForCalibration flag from that same Status column.
+
 dfs <- c("dataO", "dataNWT5", "dataMS1")
 
 for (df_name in dfs) {
@@ -307,13 +293,7 @@ for (df_name in dfs) {
 #################################################
 #### Clean up spectra, very low or high rows ####
 #################################################
-# Same bug class SS's version flags in its own history: the old DV version
-# of this step selected spectral columns by hardcoded POSITION (c(15:99)).
-# That's fragile -- it silently misaligns if any non-spectral column gets
-# added or removed upstream (which just happened: the chem side above now
-# carries extra columns like NPOC_flagged_any/NPOC_rpd_pct that the old
-# single-snapshot chem file didn't have). Select spectral columns by NAME
-# instead, so this can't drift out of alignment again.
+# Select spectral columns by NAME
 is_wl_col <- function(nm) grepl("^X?[0-9]+\\.[0-9]+\\.nm$", nm)
 
 filter_extreme_spectra <- function(df, lo = -1, hi = 60) {
@@ -321,8 +301,7 @@ filter_extreme_spectra <- function(df, lo = -1, hi = 60) {
   dplyr::filter(df, !if_any(dplyr::all_of(spec_cols), ~ . < lo | . > hi))
 }
 
-# Kept DV's original -1/60 bounds (SS uses -3/60) -- not changing the
-# threshold itself, just how the columns it applies to are selected.
+# DV's filters -1/60 bounds (SS uses -3/60)
 dataO_clean <- filter_extreme_spectra(dataO, lo = -1, hi = 60)
 dataNWT5_clean <- filter_extreme_spectra(dataNWT5, lo = -1, hi = 60)
 dataMS1_clean <- filter_extreme_spectra(dataMS1, lo = -1, hi = 60)
@@ -330,12 +309,10 @@ dataMS1_clean <- filter_extreme_spectra(dataMS1, lo = -1, hi = 60)
 ##############################################
 #### Flag flat/spiky grab-matched spectra ####
 ##############################################
-# Same flag_bad_spectra() as 05_SS_merge_grabsamples_and_scan.R, unchanged:
 # flags spectra that are wildly out of range (bad_spec), abnormally FLAT
 # relative to this site's other grab-matched spectra (flat_spec), or spiky/
-# noisy relative to a local moving average (spec_spiky). See that script's
-# comments for the full reasoning behind each threshold -- not re-derived
-# here, since the logic itself isn't DV-specific, only the data it runs on.
+# noisy relative to a local moving average (spec_spiky). SS script has the
+# comments for the full reasoning behind each threshold
 flag_bad_spectra <- function(df, lo = -20, hi = 70, min_range = 5) {
   spec_cols <- names(df)[is_wl_col(names(df))]
   spec <- as.list(df[, spec_cols])
@@ -373,6 +350,7 @@ flag_bad_spectra <- function(df, lo = -20, hi = 70, min_range = 5) {
   df
 }
 
+# plot bad spectra
 plot_bad_spectra <- function(df, site_label) {
   ggplot(df, aes(x = DateTime, y = spec_min, color = bad_spec)) +
     geom_point(size = 0.5, alpha = 0.5) +
@@ -407,41 +385,41 @@ ggsave(file.path(fig_dir, "DVMS1_abs_over_time.png"), plot_bad_spectra(dataMS1_c
 # site. Read that message() output for each site, then uncomment only the
 # site(s) where it's safe by the same standard used for SSM20 (low % drop,
 # no grab samples touched) -- same way that decision was made for SS.
-filter_spiky_scans <- function(df, site_name, factor = 3, window = 5) {
-  spec_cols <- names(df)[is_wl_col(names(df))]
-  wl_val <- as.numeric(gsub("^X|\\.nm$", "", spec_cols))
-  spec_ord_cols <- spec_cols[order(wl_val)]
-  spec_mat <- as.matrix(df[, spec_ord_cols])
-
-  half <- window %/% 2
-  padded <- cbind(
-    matrix(spec_mat[, 1], nrow = nrow(spec_mat), ncol = half),
-    spec_mat,
-    matrix(spec_mat[, ncol(spec_mat)], nrow = nrow(spec_mat), ncol = half)
-  )
-  ma <- matrix(NA_real_, nrow = nrow(spec_mat), ncol = ncol(spec_mat))
-  for (j in seq_len(ncol(spec_mat))) {
-    ma[, j] <- rowMeans(padded[, j:(j + window - 1), drop = FALSE], na.rm = TRUE)
-  }
-  dev <- abs(spec_mat - ma)
-  max_dev <- do.call(pmax, c(as.data.frame(dev), list(na.rm = TRUE)))
-  rel_dev <- ifelse(df$spec_range > 0, max_dev / df$spec_range, NA_real_)
-
-  threshold <- median(rel_dev, na.rm = TRUE) * factor
-  flagged <- !is.na(rel_dev) & rel_dev > threshold
-  n_dropped <- sum(flagged)
-  n_grab_touched <- sum(flagged & !is.na(df$Site))
-  message(sprintf(
-    "%s: filter_spiky_scans would drop %d scan(s) (%.1f%% of %d) at %gx full-record median relative deviation -- %d of those are grab-matched rows (%s to use at this site).",
-    site_name, n_dropped, 100 * n_dropped / nrow(df), nrow(df), factor, n_grab_touched,
-    if (n_grab_touched > 0) "NOT SAFE" else "safe so far, but still check the % dropped"
-  ))
-  df[!flagged, , drop = FALSE]
-}
-
-dataO_dryrun     <- filter_spiky_scans(dataO_clean, "DVO", factor = 3)
-dataNWT5_dryrun  <- filter_spiky_scans(dataNWT5_clean, "DVNWT5", factor = 3)
-dataMS1_dryrun   <- filter_spiky_scans(dataMS1_clean, "DVMS1", factor = 3)
+# filter_spiky_scans <- function(df, site_name, factor = 3, window = 5) {
+#   spec_cols <- names(df)[is_wl_col(names(df))]
+#   wl_val <- as.numeric(gsub("^X|\\.nm$", "", spec_cols))
+#   spec_ord_cols <- spec_cols[order(wl_val)]
+#   spec_mat <- as.matrix(df[, spec_ord_cols])
+# 
+#   half <- window %/% 2
+#   padded <- cbind(
+#     matrix(spec_mat[, 1], nrow = nrow(spec_mat), ncol = half),
+#     spec_mat,
+#     matrix(spec_mat[, ncol(spec_mat)], nrow = nrow(spec_mat), ncol = half)
+#   )
+#   ma <- matrix(NA_real_, nrow = nrow(spec_mat), ncol = ncol(spec_mat))
+#   for (j in seq_len(ncol(spec_mat))) {
+#     ma[, j] <- rowMeans(padded[, j:(j + window - 1), drop = FALSE], na.rm = TRUE)
+#   }
+#   dev <- abs(spec_mat - ma)
+#   max_dev <- do.call(pmax, c(as.data.frame(dev), list(na.rm = TRUE)))
+#   rel_dev <- ifelse(df$spec_range > 0, max_dev / df$spec_range, NA_real_)
+# 
+#   threshold <- median(rel_dev, na.rm = TRUE) * factor
+#   flagged <- !is.na(rel_dev) & rel_dev > threshold
+#   n_dropped <- sum(flagged)
+#   n_grab_touched <- sum(flagged & !is.na(df$Site))
+#   message(sprintf(
+#     "%s: filter_spiky_scans would drop %d scan(s) (%.1f%% of %d) at %gx full-record median relative deviation -- %d of those are grab-matched rows (%s to use at this site).",
+#     site_name, n_dropped, 100 * n_dropped / nrow(df), nrow(df), factor, n_grab_touched,
+#     if (n_grab_touched > 0) "NOT SAFE" else "safe so far, but still check the % dropped"
+#   ))
+#   df[!flagged, , drop = FALSE]
+# }
+# 
+# dataO_dryrun     <- filter_spiky_scans(dataO_clean, "DVO", factor = 3)
+# dataNWT5_dryrun  <- filter_spiky_scans(dataNWT5_clean, "DVNWT5", factor = 3)
+# dataMS1_dryrun   <- filter_spiky_scans(dataMS1_clean, "DVMS1", factor = 3)
 
 # Once you've checked the message() output above for a site and it's safe
 # to apply, swap that site's *_clean assignment to use the *_dryrun result,

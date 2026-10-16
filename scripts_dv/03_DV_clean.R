@@ -212,23 +212,6 @@ DVO_test <- DVO %>%
     ~ ifelse(between(DateTime, as.Date("2024-07-25"), as.Date("2024-10-17")), NA, .)
   ))
 
-# #########################################
-# #### remove low volt at end of USF21 ####
-# #########################################
-# USF21_test <- USF21 %>%
-#   mutate(across(
-#     c("DOC_clean", "NO3.N_clean", "NO3_clean", "TOC_clean", "TSS_clean", 27:236),
-#     ~ ifelse(between(DateTime, as.Date("2024-11-15"), as.Date("2024-11-16")), NA, .)
-#   ))
-# 
-# ########################
-# #### Return to list ####
-# ########################
-# scan_filtered2 <- list()
-# scan_filtered2[["USF21"]] <- USF21_test
-# scan_filtered2[["USF20"]] <- USF20_test
-# scan_filtered2[["USF12"]] <- USF12
-
 #####################################
 #### Plot all variables together ####
 #####################################

@@ -2,7 +2,6 @@
 ## Project: QuEST
 ## Here we will be Calibrating s::can data using Partial Least Squares Regression (PLSR) 
 ## Following Arial's s::can guide
-## press Command+Option+O to collapse all sections and get an overview of the workflow!
 ##==============================================================================
 
 library(googledrive) 
@@ -172,8 +171,9 @@ CTB <- CTB %>%
     TRUE ~ NA_character_
   ))
 
-NCBd <- NCBd %>%
-  mutate(NPOC..mg.C.L. = ifelse(DateTime == "2025-08-11 11:00:00" | is.na(NPOC..mg.C.L.),NA,NPOC..mg.C.L.))
+# # remove problematic sample
+# NCBd <- NCBd %>%
+#   mutate(NPOC..mg.C.L. = ifelse(DateTime == "2025-08-11 11:00:00" | is.na(NPOC..mg.C.L.),NA,NPOC..mg.C.L.))
 
 NCBd <- NCBd %>% 
   mutate(Grab_sample = case_when(
@@ -187,11 +187,13 @@ LMP07 <- LMP07 %>%
     TRUE ~ NA_character_
   ))
 
-LMP27 <- LMP27 %>%
-  mutate(NPOC..mg.C.L. = ifelse(DateTime %in% as.POSIXct(c("2025-09-08 13:00:00", 
-                                                           "2025-01-13 16:00:00", 
-                                                           "2024-12-11 14:00:00")) | 
-                                  is.na(NPOC..mg.C.L.), NA, NPOC..mg.C.L.))
+
+# # remove problematic samples
+# LMP27 <- LMP27 %>%
+#   mutate(NPOC..mg.C.L. = ifelse(DateTime %in% as.POSIXct(c("2025-09-08 13:00:00", 
+#                                                            "2025-01-13 16:00:00", 
+#                                                            "2024-12-11 14:00:00")) | 
+#                                   is.na(NPOC..mg.C.L.), NA, NPOC..mg.C.L.))
 
 LMP27 <- LMP27 %>% 
   mutate(Grab_sample = case_when(
@@ -220,13 +222,6 @@ grab.DOCNCBd = grab_NCBd$NPOC..mg.C.L.
 grab.DOC07 = grab_LMP07$NPOC..mg.C.L.
 grab.DOC27 = grab_LMP27$NPOC..mg.C.L.
 grab.DOC72 = grab_LMP72$NPOC..mg.C.L.
-
-#### remove a couple of problematic samples ####
-# grab_LMP27 <- grab_LMP27 %>%
-#   mutate(NPOC..mg.C.L. = ifelse(DateTime == "2025-09-08 13:00:00" | is.na(NPOC..mg.C.L.),NA,NPOC..mg.C.L.))
-
-# grab_USFSMB <- grab_USFSMB %>%
-#   mutate(NPOC..mg.C.L. = ifelse(DateTime == "SMB24-06-19 14:00:00" | is.na(NPOC..mg.C.L.),NA,NPOC..mg.C.L.))
 
 # compare grab vs scan DOC
 ggplot(grab_CTB, aes(x = NPOC..mg.C.L., y = DOCeq..mg.l....Measured.value)) +
@@ -775,23 +770,6 @@ str(predictedCNCBd)
 plot(predictedCNCBd)
 
 write.csv(predictedCNCBd, file = "predicted/PredictedC_NCBd.csv") # <- this is your newly calibrated dataset!
-
-# 1. Loadings Plot for USFCTB (Opposite Trend)
-# This shows how the wavelengths contribute to each component (ncomp = 1, 2, 3, etc.)
-plot(CmodCTB, plottype = "loading",
-     comps = 1:2, # Plot the first two components for initial inspection
-     main = "CTB NO3-N PLSR Loadings")
-
-# 2. Loadings Plot for USFSMB (Flat Trend)
-plot(CmodSMB, plottype = "loading",
-     comps = 1:2, # Plot the first two components
-     main = "SMB NO3-N PLSR Loadings")
-
-# 3. Loadings Plot for USFNCBd (Flat Trend)
-# Examine the first few components for USFNCBd
-plot(CmodNCBd, plottype = "loading",
-     comps = 1:2, # Plot the first two components
-     main = "NCBd NO3-N PLSR Loadings")
 
 # Convert predictedCNCBd to a data frame
 pred_df <- data.frame(

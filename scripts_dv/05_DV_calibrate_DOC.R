@@ -531,7 +531,7 @@ save_plot("DVNWT5_pred.png", plot(predictedCDVNWT5))
 
 write.csv(predictedCDVNWT5, file = "predicted/PredictedC_DVNWT5.csv") # <- this is your newly calibrated dataset!
 
-# Convert predictedCDVNWT5 to a data frame
+# Convert predictedCDVNWT5 to a data frame 
 pred_df_DVNWT5 <- data.frame(
   DateTime = as.POSIXct(dimnames(predictedCDVNWT5)[[1]]),
   Predicted = as.numeric(predictedCDVNWT5))

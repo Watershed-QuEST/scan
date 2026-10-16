@@ -3,20 +3,14 @@
 ## Here we will be Calibrating s::can data using Partial Least Squares Regression (PLSR) 
 ## Following Arial's s::can guide
 ##
-## RAW (uncompensated) FINGERPRINT VERSION -- NEW (Sep 28)
+## RAW (uncompensated) FINGERPRINT VERSION --
 ## Identical calibration pipeline to 06_SS_calibrate_DOC.R, but reads the
 ## raw/uncompensated spectra (*_merged_raw.csv, produced by
 ## 05_SS_merge_grabsamples_and_scan.R from 01/02's *_absparams_raw*.csv)
-## instead of the default turbidity-compensated spectra. This tests Ariel's
-## suggestion that the compensation algorithm may be overcorrecting and
-## removing real DOC-related spectral signal. Run this alongside
-## 06_SS_calibrate_DOC.R and compare the report_fit_stats() R2/r/RMSE
-## output for each site -- that's the actual side-by-side test. Every
-## output file (figures, predicted CSVs) is suffixed "_raw" so nothing here
-## ever overwrites the compensated pipeline's output. If you change
-## something here (ncomp, a QC threshold, etc.), consider whether the same
-## change should be mirrored in 06_SS_calibrate_DOC.R for a fair
-## comparison, and vice versa -- these two files are NOT auto-synced.
+## instead of the default turbidity-compensated spectra. Ran this alongside
+## 06_SS_calibrate_DOC.R and compared the report_fit_stats() R2/r/RMSE
+## output for each site. Every output file (figures, predicted CSVs) is
+## suffixed "_raw".
 ##==============================================================================
 
 library(googledrive)
@@ -28,56 +22,10 @@ library(spectrolab)
 library(ggplot2)
 library(plotly)
 
-# Defensive insurance against a real bug hit today: if this script is run
-# interactively in chunks (rather than sourced top-to-bottom in one clean
-# pass) and an earlier run errored out partway through, a png() device from
-# that earlier run can be left open. A later save_plot() call can then write
-# to -- or pick up leftover content from -- the wrong device, so one site's
-# PNG silently ends up holding another site's plot (this happened: SSM01's
-# comps_natural.png came out holding SST13's plot instead). graphics.off()
-# force-closes every open graphics device before this script opens any of
-# its own, so a stray device from a previous partial run can't contaminate
-# this one. Still best to run the whole script top-to-bottom in one go
-# rather than by selection.
-graphics.off()
-
-######################################################
-#### Spectral wavelength cutoff (testable, Sep 25) ###
-######################################################
-# The predictor spectrum was hardcoded to columns [17:117], i.e. every
-# retained wavelength from 200-450nm. We discussed testing a narrower
-# range (e.g. cutting off around 300-350nm instead of 450nm) -- DOC's
-# strongest/most informative UV-Vis signal is typically in the UV region
-# (~200-300nm; a254 is the classic single-wavelength DOC proxy), so a lot
-# of the 350-450nm range may just be adding noisy/uninformative predictors
-# to the PLSR fit without adding real DOC signal. This makes that cutoff a
-# single tunable constant instead of six hardcoded [17:117] slices, so it's
-# easy to try different values and rerun.
-#
-# Change ONLY this line to test a different cutoff (e.g. 300, 350):
-DOC_WL_MAX <- 450
-
-# Selects the column *positions* (not names) in df whose header is a
-# wavelength (matches "200.00", "202.50", etc -- the format left after
-# rename_columns() strips "X"/".nm") and whose numeric value is
-# <= DOC_WL_MAX. Works on SSM01/SSM20/SST13 and on grab_SSM01/etc (same
-# columns, fewer rows) since both keep the original column names.
-spec_col_idx <- function(df, wl_max = DOC_WL_MAX) {
-  wl_col <- grep("^[0-9]+\\.[0-9]+$", colnames(df))
-  wl_val <- as.numeric(colnames(df)[wl_col])
-  wl_col[wl_val <= wl_max]
-}
-
 ######################################
 #### Auto-save calibration figures ###
 ######################################
-# All the plot() calls below used to only go to the interactive graphics
-# device, so saving any of them to scan_figs/ meant manually exporting each
-# one by hand -- easy to skip (SSM20's rmse/comps plots were missing for
-# exactly this reason). save_plot() opens a png() device, evaluates the
-# plot expression into it, and closes it, so every figure below is written
-# to disk automatically as the script runs. Works for both base-R plot()
-# calls (which draw as a side effect) and ggplot objects (via print()).
+# save plots automatically as png
 fig_dir <- "scan_figs"
 if (!dir.exists(fig_dir)) dir.create(fig_dir, recursive = TRUE)
 
@@ -93,6 +41,23 @@ save_plot <- function(filename, plot_expr, width = 900, height = 600, res = 120)
 # List and delete all files in the folder
 files <- list.files(path = "googledrive", full.names = TRUE)
 file.remove(files)
+
+#######################################################
+#### Spectral wavelength cutoff (testable, Sep 25) ####
+#######################################################
+
+# Change ONLY this line to test a different cutoff (e.g. 300, 350):
+DOC_WL_MAX <- 450
+
+# Selects the column *positions* (not names) in df whose header is a
+# wavelength (matches "200.00", "202.50", etc -- the format left after
+# rename_columns() strips "X"/".nm") and whose numeric value is
+# <= DOC_WL_MAX
+spec_col_idx <- function(df, wl_max = DOC_WL_MAX) {
+  wl_col <- grep("^[0-9]+\\.[0-9]+$", colnames(df))
+  wl_val <- as.numeric(colnames(df)[wl_col])
+  wl_col[wl_val <= wl_max]
+}
 
 ######################################
 #### STEP 1: Prep grab sample data ###
@@ -206,43 +171,32 @@ SST13 <- SST13 %>%
 #########################################################
 #### Drop MDL-replaced grab samples from calibration ####
 #########################################################
-# UPDATED (Sep 24): now that 05_SS_merge_grabsamples_and_scan.R sources
-# chem_raw_flagged.csv and averages replicates itself, each grab sample
-# carries an NPOC-SPECIFIC flag (NPOC_flagged_any) instead of the old
-# n_below_MDL, which counted MDL hits across every analyte (NH4, PO4,
-# Cl...) and was dropping samples whose actual NPOC reading was fine. We
-# only exclude on NPOC_flagged_any now. NPOC_high_rpd (replicates
-# disagreeing by >20%) is a real QC concern too, but averaging vs. dropping
-# a high-RPD sample is a judgment call -- it's reported via message() and
-# left IN the calibration set rather than auto-dropped; revisit per-site
-# if these turn out to be leverage points in the fit.
 drop_mdl_replaced <- function(df, site_name) {
-  # Every term here is explicitly NA-guarded so is_mdl is a clean TRUE/FALSE
-  # vector with no NAs -- df$Grab_sample[is_mdl] <- ... errors ("NAs are not
-  # allowed in subscripted assignments") if is_mdl itself contains NA, which
-  # a plain `df$Grab_sample == "Y"` would for the ~30,000 non-grab rows.
+  # guards every term with !is.na(...) first to keep is_mdl NA-free.
+  # Builds a TRUE/FALSE vector: TRUE only for rows that are a grab sample 
+  # (Grab_sample == "Y") and have their NPOC replicate flagged as MDL-affected
   is_mdl <- !is.na(df$Grab_sample) & df$Grab_sample == "Y" &
     !is.na(df$NPOC_flagged_any) & df$NPOC_flagged_any
+  # Counts how many rows got flagged
   n_mdl <- sum(is_mdl)
   if (n_mdl > 0) {
     message(sprintf("%s: dropping %d grab sample(s) with an MDL-flagged NPOC replicate from calibration.", site_name, n_mdl))
   }
+  # for every row flagged by is_mdl, NA out Grab_sample
   df$Grab_sample[is_mdl] <- NA_character_
-
+  # Same NA-safe pattern as is_mdl, but for the RPD flag instead:
+  # TRUE for grab-sample rows whose NPOC replicates disagreed by more than 20%.
   is_high_rpd <- !is.na(df$Grab_sample) & df$Grab_sample == "Y" &
     !is.na(df$NPOC_high_rpd) & df$NPOC_high_rpd
+  # high RPD is flagged but left in the calibration set rather than excluded.
   n_high_rpd <- sum(is_high_rpd)
   if (n_high_rpd > 0) {
     message(sprintf("%s: %d grab sample(s) kept in calibration but have NPOC replicate RPD > 20%% (replicates disagreed) -- worth a manual look.", site_name, n_high_rpd))
   }
 
-  # NEW (Sep 24): drop grab samples whose matched spectrum is flagged
+  # drop grab samples whose matched spectrum is flagged
   # flat_spec (abnormally low absorbance dynamic range -- see
-  # flag_bad_spectra() in 05_SS_merge_grabsamples_and_scan.R). Unlike
-  # NPOC_high_rpd above, this IS auto-dropped: it's independent evidence
-  # the SPECTRUM itself is a bad/artifact reading (not just a hard case for
-  # the model), so training on it teaches the model a false spectrum-DOC
-  # relationship rather than a real one.
+  # flag_bad_spectra() in 05_SS_merge_grabsamples_and_scan.R).
   is_flat_spec <- !is.na(df$Grab_sample) & df$Grab_sample == "Y" &
     !is.na(df$flat_spec) & df$flat_spec
   n_flat_spec <- sum(is_flat_spec)
@@ -251,16 +205,7 @@ drop_mdl_replaced <- function(df, site_name) {
   }
   df$Grab_sample[is_flat_spec] <- NA_character_
 
-  # NEW (Sep 25): drop grab samples whose spectrum is flagged spec_spiky --
-  # a single wavelength jumping sharply off the smooth curve the rest of
-  # the spectrum follows, relative to that site's own typical grab-sample
-  # spectrum (see spec_spiky in 05_SS_merge_grabsamples_and_scan.R's
-  # flag_bad_spectra() for the full explanation and validation). Same
-  # auto-drop treatment as flat_spec: this is independent evidence the
-  # SPECTRUM is a bad reading, not just a hard case for the model. Deliberately
-  # does NOT catch SST13's two high-DOC anchors (2024-11-01, 2024-11-11) --
-  # that was checked directly against the data before picking the
-  # threshold in flag_bad_spectra().
+  # drop grab samples whose spectrum is flagged spec_spiky
   is_spiky <- !is.na(df$Grab_sample) & df$Grab_sample == "Y" &
     !is.na(df$spec_spiky) & df$spec_spiky
   n_spiky <- sum(is_spiky)
@@ -275,41 +220,15 @@ SSM01 <- drop_mdl_replaced(SSM01, "SSM01 (raw fingerprint)")
 SSM20 <- drop_mdl_replaced(SSM20, "SSM20 (raw fingerprint)")
 SST13 <- drop_mdl_replaced(SST13, "SST13 (raw fingerprint)")
 
-# TRIED (Sep 25) and REVERTED: explicitly dropping SST13's two high-DOC
-# grab samples (2024-11-01, NPOC = 63.74 mg/L; 2024-11-11, NPOC = 53.96
-# mg/L -- the top two in the site's range, next-highest is ~40) from
-# calibration. Neither is flagged by flat_spec/spec_spiky/MDL -- their
-# spectra are clean; this was a leverage/extrapolation call, not a
-# data-quality one, done because their LOO-CV predictions were unstable
-# (2024-11-11 alone was driving R2 = -202 once 2024-11-01 was already
-# removed). Reverted because removing them made things worse, not better:
-# with no high-DOC anchor left, the model had nothing to calibrate against
-# whenever the full deployment record hit a high-absorbance period, and
-# the resulting predicted-timeseries plot got visibly worse (uncontrolled
-# log-space extrapolation, not a stable prediction). Both points are kept
-# in calibration. This tension -- these are simultaneously the only real
-# high-DOC training anchors AND the most destabilizing points for LOO-CV
-# with so few samples -- is exactly the kind of question flagged for Ariel
-# rather than resolved by removing data.
-
 # Filter using "Grab_sample" column
-# NOTE: SSM01$Grab_sample == "Y" is NA (not FALSE) for the ~30,000 rows
-# where Grab_sample is NA. Using a logical vector with NAs to subset rows
-# with df[idx, ] does NOT drop the NA positions -- R keeps them as extra
-# rows filled entirely with NA. So grab_SSM01/etc has always been the full
-# ~30,000-row dataset (only ~8 real rows), not the small subset everyone
-# assumed -- it just never showed up because lm()/plsr() silently drop
-# NA rows via na.omit internally. Explicitly excluding NA here is the
-# actual fix (my earlier grab.spec.dat / MDL-filter changes were correct
-# but couldn't help, since grab_SSM01 itself was never actually small).
 grab_SSM01 = SSM01[!is.na(SSM01$Grab_sample) & SSM01$Grab_sample == "Y",]
 message(sprintf("CHECKPOINT nrow(grab_SSM01) = %d", nrow(grab_SSM01)))
 grab_SSM20 = SSM20[!is.na(SSM20$Grab_sample) & SSM20$Grab_sample == "Y",]
 grab_SST13 = SST13[!is.na(SST13$Grab_sample) & SST13$Grab_sample == "Y",]
 
-##########################################################################
+########################################################################
 #### Save the complete abs record + the training abs (raw fingerprint) #
-##########################################################################
+########################################################################
 # Same idea as the compensated script's version of this block: SSM01/
 # SSM20/SST13 here are the full ~30,000-row raw-fingerprint deployment
 # record (post drop_mdl_replaced()), grab_SSM01/SSM20/SST13 are the
@@ -383,10 +302,6 @@ mask_non_grabs <- function(df, site_name) {
 }
 
 # 3. Apply the mask
-# NOTE: SSM01_clean/SSM20_clean/SST13_clean are no longer used below --
-# see the comment above grab.spec.datSSM01 for why (row-count mismatch
-# with grab.DOCSSM01/etc caused a silent recycling bug). Left in place
-# in case mask_non_grabs() is useful again for something else later.
 SSM01_clean <- mask_non_grabs(SSM01, "SSM01 (raw fingerprint)")
 SSM20_clean <- mask_non_grabs(SSM20, "SSM20 (raw fingerprint)")
 SST13_clean <- mask_non_grabs(SST13, "SST13 (raw fingerprint)")
@@ -403,21 +318,7 @@ SST13_clean <- mask_non_grabs(SST13, "SST13 (raw fingerprint)")
 #######################################################################################
 # 1. Index data set with columns with absorbances
 # raw spectra
-# NOTE: previously built from SSM01_clean/SSM20_clean/SST13_clean (the
-# mask_non_grabs() output), which keeps ALL ~30,000 rows of the time series
-# with spectra set to NA for non-grab rows -- it does NOT drop those rows.
-# Combined with the much shorter grab.DOCSSM01/etc vector in grabcal.df
-# below, data.frame() silently RECYCLED (tiled) the short DOC vector to
-# fill 30,000+ rows. Since the real grab-sample rows sit at scattered,
-# arbitrary positions in that 30,000-row series (not positions 1..N), each
-# row that survived plsr()'s na.omit got paired with essentially a random
-# DOC value from the recycling pattern, not its own true lab value -- a
-# silent train-on-garbage bug independent of anything else fixed so far.
-# Building this from grab_SSM01/etc instead (the already row-filtered
-# subset used to build grab.DOCSSM01 itself) guarantees each spectrum is
-# paired with its own correct DOC value, in the same order, same length.
 grab.spec.datSSM01 = grab_SSM01[spec_col_idx(grab_SSM01)]
-message(sprintf("CHECKPOINT dim(grab.spec.datSSM01) = %s", paste(dim(grab.spec.datSSM01), collapse=" x ")))
 grab.spec.datSSM20 = grab_SSM20[spec_col_idx(grab_SSM20)]
 grab.spec.datSST13 = grab_SST13[spec_col_idx(grab_SST13)]
 
@@ -436,7 +337,6 @@ grab.spec.datSST13 <- rename_columns(grab.spec.datSST13)
 # Rows = wavelength
 # Columns = date/time
 absSSM01 = (grab.spec.datSSM01)  # this is not doing anything and just copying grab.spec.datSSM01 again as absSSM01
-message(sprintf("CHECKPOINT dim(absSSM01) after STEP4 assignment = %s", paste(dim(absSSM01), collapse=" x ")))
 absSSM20 = (grab.spec.datSSM20)
 absSST13 = (grab.spec.datSST13)
 #str(abs)
@@ -639,21 +539,12 @@ grabcal.dfSSM01$Date <- grab_SSM01$Date
 grabcal.dfSSM20$Date <- grab_SSM20$Date
 grabcal.dfSST13$Date <- grab_SST13$Date
 
-##########################################################################
-#### Log-transform DOC before fitting -- DOC error is typically        ####
-#### multiplicative (bigger absolute error at higher concentration),   ####
-#### so an untransformed PLSR fit lets a few higher-DOC samples        ####
-#### dominate the loss and the low end gets fit poorly in relative     ####
-#### terms. We fit on log(DOC) and back-transform predictions with     ####
-#### exp() everywhere they're used below. No storm/high-leverage       ####
-#### samples were identified for these SS sites, so nothing is being   ####
-#### filtered out here -- this only changes the fitting scale.         ####
-##########################################################################
+#################################################################################
+#### Log-transform DOC before fitting -- double check if its ok to do this?? ####
+#################################################################################
 # log() of a zero or negative DOC value is -Inf/NaN, which would silently
 # corrupt the fit rather than erroring cleanly -- check for that specifically
-# before transforming. NA lab values are left alone: plsr()'s default
-# na.omit already drops NA-response rows when fitting, same as it did
-# before this log-transform (e.g. samples below the NPOC detection limit).
+# before transforming.
 check_log_domain <- function(x, label) {
   non_na <- x[!is.na(x)]
   if (any(non_na <= 0)) {
@@ -706,30 +597,12 @@ save_plot("SSM01_raw_comps.png", plot(CmodSSM01, ncomp = 5, asp = 1, line = TRUE
 # it's actually readable and comparable to the pre-log-transform version.
 # Uses the LOO-CV predictions already computed during fitting (not a second
 # fit), at the same ncomp as the plot above.
-# LOO-CV predictions (Cmod*$validation$pred) only cover the rows plsr()
-# actually used to fit. If any grab sample's spectrum has an NA band (or
-# its log-DOC is NA), plsr()'s default na.omit silently drops that row
-# before fitting -- but grabcal.df* still has the full row count, since
-# nothing upstream removed it. Building "measured" straight from
-# grabcal.df* without accounting for that is what caused "arguments imply
-# differing number of rows: 25, 21": 25 grab samples went into
-# CTrainSSM01, only 21 survived na.omit and have a validation$pred row.
-# This pulls out exactly the rows the model actually used, in the same
-# order, so measured/predicted always line up regardless of how many rows
-# get dropped.
 cv_measured <- function(response_vec, model) {
   omitted <- if (!is.null(model$na.action)) as.integer(model$na.action) else integer(0)
   if (length(omitted) > 0) response_vec[-omitted] else response_vec
 }
 
-# NEW (Sep 25): fit-quality numbers (R2, Pearson r, RMSE, MAE) for the
-# LOO-CV predicted-vs-measured comparison, on the natural (mg/L) scale --
-# same scale as the *_comps_natural.png plots, since that's what's
-# actually meaningful/reportable. R2 here is 1 - SS_res/SS_tot against the
-# 1:1 line (how PLSR's own R2 is defined for a validation set), NOT the
-# R2 of a separate best-fit regression line through the points -- so a
-# systematic bias (not just scatter) also lowers it, which is the right
-# behavior for a calibration check.
+# fit stats
 report_fit_stats <- function(df, site_name) {
   ok <- stats::complete.cases(df$measured, df$predicted)
   m <- df$measured[ok]
@@ -753,11 +626,9 @@ ssm01_cv_natural <- data.frame(
   measured  = cv_measured(grabcal.dfSSM01$DOCSSM01, CmodSSM01),
   predicted = exp(as.numeric(CmodSSM01$validation$pred[, 1, "5 comps"]))
 )
+
 # Which specific grab dates are behind the worst LOO-CV predictions --
-# check these against NPOC_high_rpd/bad_spec before dropping anything;
-# don't drop a point just because the model predicted it badly (that's
-# circular -- it removes whatever the model finds hardest, not
-# necessarily a genuinely bad sample).
+# check these against NPOC_high_rpd/bad_spec before dropping anything
 print(ssm01_cv_natural[order(-abs(ssm01_cv_natural$predicted - ssm01_cv_natural$measured)), ])
 report_fit_stats(ssm01_cv_natural, "SSM01 (raw fingerprint)")
 save_plot("SSM01_raw_comps_natural.png", ggplot(ssm01_cv_natural, aes(x = measured, y = predicted)) +
